@@ -8,6 +8,8 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+  // お店の設定 public/shop.jsonc を worker.js が文字として読みこむため
+  "rules": [{ "type": "Text", "globs": ["**/*.jsonc"], "fallthrough": true }],
   // データベース（D1）。database_id は Cloudflare で作った yoyaku-demo の値（2026/10/20 チャットが作成）
   // 表は worker.js が最初のリクエストで CREATE TABLE IF NOT EXISTS で作る（schema.sql は同じ内容の控え）
   "d1_databases": [

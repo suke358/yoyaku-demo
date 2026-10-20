@@ -1,8 +1,8 @@
-// 予約カレンダーのデモ（架空のお店 hiyori）の API　2026/10/20
+// 予約カレンダー（Lift-Off の部品）の API　2026/10/20（10/20 夜：お店ごとの値を public/shop.jsonc に。日本時間で計算）
 // 持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存しない（Formspree へ画面から直接送る）
 //
-// GET  /api/days                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）
-// POST /api/book {date,start,minutes} 営業時間内か・重なりがないかを確かめて入れる（片づけ BUFFER_MIN を足す）。重なったら 409
+// GET  /api/days                      今日以降（daysAhead 日先まで）の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
+// POST /api/book {date,start,minutes} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる（片づけ bufferMin を足す）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu つき）・settings
@@ -11,9 +11,19 @@
 //   POST   /api/admin/block  {date,s,e}          LINE・電話の予約を入れる（重なったら 409）
 //   DELETE /api/admin/block  {id}                予約を取り消す（あける）
 //   POST   /api/admin/settings {key,value}       型などを保存（value は JSON）
+// GET  /manifest.webmanifest・/apple-touch-icon.png  お店の画面をホーム画面に置くときの名前とアイコン
 
-var BUFFER_MIN = 20;   // 片づけ・準備の時間（分）。画面の CONFIG.bufferMin と同じにする
-var STEP_MIN = 30;     // 開始時間のきざみ（分）
+import shopText from '../public/shop.jsonc';
+
+// shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す）
+function parseJsonc(t) {
+  return JSON.parse(t.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
+}
+var SHOP = parseJsonc(shopText);
+var BUFFER_MIN = +SHOP.bufferMin || 20;
+var STEP_MIN = +SHOP.stepMin || 30;
+var DAYS_AHEAD = +SHOP.daysAhead || 60;
+var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
 
 // 表を最初のリクエストで作る（Workers Builds では migrations が自動で走らないため。schema.sql と同じ内容）
 var SCHEMA = [
@@ -37,8 +47,16 @@ function m2(t) { var a = String(t).split(':'); return (+a[0]) * 60 + (+a[1]); }
 function t2(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
 function isDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s)); }
 function isTime(s) { return /^\d{2}:\d{2}$/.test(String(s)) && m2(s) >= 0 && m2(s) <= 24 * 60; }
-function todayJST() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
 function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+// 日本時間（Workers は UTC で動くので、+9 時間して日付と時刻を出す）
+function nowJST() {
+  var d = new Date(Date.now() + 9 * 3600 * 1000);
+  return { date: d.toISOString().slice(0, 10), min: d.getUTCHours() * 60 + d.getUTCMinutes() };
+}
+function addDays(dateKey, n) {
+  var d = new Date(dateKey + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+}
 
 async function readJson(request) {
   try { return await request.json(); } catch (e) { return null; }
@@ -55,27 +73,31 @@ async function insertBlock(db, b) {
 }
 
 async function handleDays(env) {
-  var today = todayJST();
-  var hours = (await env.DB.prepare('SELECT date, s, e FROM hours WHERE date >= ?1 ORDER BY date').bind(today).all()).results;
-  var bl = (await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 ORDER BY date, s').bind(today).all()).results;
+  var now = nowJST(), last = addDays(now.date, DAYS_AHEAD);
+  var hours = (await env.DB.prepare('SELECT date, s, e FROM hours WHERE date >= ?1 AND date <= ?2 ORDER BY date').bind(now.date, last).all()).results;
+  var bl = (await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results;
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
-  return json({ today: today, bufferMin: BUFFER_MIN, stepMin: STEP_MIN, hours: hours, busy: busy });
+  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: !!SHOP.formspree, hours: hours, busy: busy });
 }
 
 async function handleBook(request, env) {
+  if (!SHOP.formspree) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
   var b = await readJson(request);
   if (!b || !isDate(b.date) || !isTime(b.start) || !(b.minutes > 0 && b.minutes <= 240)) return json({ error: '入力が足りません' }, 400);
-  if (b.date < todayJST()) return json({ error: '過ぎた日です' }, 400);
+  var now = nowJST();
+  if (b.date < now.date) return json({ error: '過ぎた日です' }, 400);
+  if (b.date > addDays(now.date, DAYS_AHEAD)) return json({ error: '先すぎる日です（' + DAYS_AHEAD + '日先まで）' }, 400);
+  var s = m2(b.start), e = s + Number(b.minutes), eb = e + BUFFER_MIN;
+  if (b.date === now.date && s < now.min + CUTOFF_MIN) return json({ error: '当日は ' + CUTOFF_MIN + ' 分前までのご予約です。LINE かお電話でお願いします' }, 400);
   var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
   if (!h) return json({ error: 'この日は営業していません' }, 400);
-  var s = m2(b.start), e = s + Number(b.minutes), eb = e + BUFFER_MIN;
   if ((s - m2(h.s)) % STEP_MIN !== 0) return json({ error: '開始時間の形が違います' }, 400);
   if (s < m2(h.s) || e > m2(h.e)) return json({ error: '営業時間の外です' }, 400);
-  var ok = await insertBlock(env.DB, { id: newId(), date: b.date, s: t2(s), e: t2(eb), kind: 'net', menu: String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
+  var id = newId();
+  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(eb), kind: 'net', menu: String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
   if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);
-  var row = await env.DB.prepare('SELECT id FROM blocks WHERE date = ?1 AND s = ?2 AND kind = ?3').bind(b.date, t2(s), 'net').first();
-  return json({ ok: true, id: row ? row.id : null, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb) });
+  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb) });
 }
 
 async function handleAdmin(request, env, path) {
@@ -89,7 +111,7 @@ async function handleAdmin(request, env, path) {
     var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu FROM blocks ORDER BY date, s').all()).results;
     var st = (await env.DB.prepare('SELECT key, value FROM settings').all()).results, settings = {};
     st.forEach(function (r) { try { settings[r.key] = JSON.parse(r.value); } catch (e) { } });
-    return json({ hours: hours, blocks: blocks, settings: settings, bufferMin: BUFFER_MIN, stepMin: STEP_MIN });
+    return json({ today: nowJST().date, hours: hours, blocks: blocks, settings: settings, bufferMin: BUFFER_MIN, stepMin: STEP_MIN });
   }
   var b = await readJson(request) || {};
   if (path === 'hours' && m === 'POST') {
@@ -131,10 +153,22 @@ async function handleAdmin(request, env, path) {
   return json({ error: 'ありません' }, 404);
 }
 
+// ホーム画面用（お店の画面）：名前は「〇〇 予約管理」。アイコンは public/icon-180.png（tools/make_icon.py で作る）
+function manifest() {
+  var name = SHOP.shopName + ' 予約管理';
+  return new Response(JSON.stringify({
+    name: name, short_name: '予約管理', start_url: '/admin', display: 'standalone',
+    background_color: '#f7f2ea', theme_color: SHOP.color.main,
+    icons: [{ src: '/icon-180.png', sizes: '180x180', type: 'image/png' }]
+  }), { headers: { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
 export default {
   async fetch(request, env) {
     var url = new URL(request.url);
     var p = url.pathname;
+    if (p === '/manifest.webmanifest') return manifest();
+    if (p === '/apple-touch-icon.png' || p === '/apple-touch-icon-precomposed.png') return env.ASSETS.fetch(new Request(url.origin + '/icon-180.png', request));
     if (p.indexOf('/api/') !== 0) return env.ASSETS.fetch(request);
     try {
       await ensureTables(env.DB);
@@ -143,8 +177,7 @@ export default {
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
     } catch (e) {
-      var msg = String(e && e.message || e);
-      return json({ error: 'サーバーでエラー：' + msg }, 500);
+      return json({ error: 'サーバーでエラー：' + String(e && e.message || e) }, 500);
     }
   }
 };

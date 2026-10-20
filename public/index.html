@@ -4,12 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
-<title>hiyori（架空のお店）ご予約｜予約カレンダー デモ</title>
+<title>ご予約</title>
 <!--
-  Lift-Off 部品「予約カレンダー」デモ（2026/10/20）。お客さんの画面。元は 予約カレンダー_試作2（10月20日版）.html
+  Lift-Off 部品「予約カレンダー」お客さんの画面（2026/10/20）。お店ごとの値は /shop.jsonc（店名・色・メニュー・片づけの分 など）。
   考え方：お店は「営業時間」だけ入れる → お客さんがメニューを選ぶと、メニューの長さ＋片づけの時間で空いている開始時間が出る → 予約が入るとその分だけ埋まる。
   サーバー（/api）が持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存せず、この画面から Formspree（お店のメール）へ送る。
-  ほかのお店で使うときは、下の CONFIG だけを書きかえる。
 -->
 <style>
 :root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80}
@@ -24,7 +23,6 @@ main{max-width:520px;margin:0 auto;padding:14px 16px 60px}
 h2{font-family:"Hiragino Mincho ProN","Noto Serif JP",serif;font-weight:600;font-size:19px;text-align:center;margin:4px 0 0;letter-spacing:.12em}
 .en{font-size:10px;text-align:center;color:var(--sub);letter-spacing:.25em;margin-bottom:12px}
 .note{font-size:12.5px;color:#7d6a62}
-.hint{font-size:12px;background:var(--soft);border-radius:10px;padding:8px 12px;margin:0 0 12px;color:#7d5a63}
 label.f{display:block;font-size:13px;color:#6b5a52;margin:10px 0 4px}
 .req{color:#d33;font-size:11px;margin-left:4px}
 input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
@@ -39,7 +37,10 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .chips{display:flex;flex-wrap:wrap;gap:7px}
 .chip{border-radius:999px;padding:7px 12px;font-size:14px;border:1px solid var(--okbd);color:var(--ok);background:var(--okbg)}
 .full-t{font-size:13px;color:var(--mute)}
-.linebtn{display:block;text-align:center;background:#06c755;color:#fff;text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:12px}
+.other{border-top:1px dashed var(--line);margin-top:14px;padding-top:12px;text-align:center}
+.other .t{font-size:13.5px;margin-bottom:8px}
+.linebtn{display:block;text-align:center;background:#06c755;color:#fff;text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:8px}
+.telbtn{display:block;text-align:center;border:1px solid var(--line);color:var(--ink);text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:8px;background:#fff}
 .sheet{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(40,30,28,.45);display:none;align-items:flex-end;justify-content:center;z-index:20}
 .sheet.on{display:flex}
 .sheet .box{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:18px 16px 24px;max-height:92vh;overflow:auto}
@@ -54,6 +55,7 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .btn.ghost{background:#fff;border:1px solid var(--line)}
 .thanks{text-align:center}.thanks .big{font-size:40px;color:var(--main)}
 .warn{font-size:13px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:10px 12px;margin-top:10px;text-align:left;color:#7a5a16}
+.stop{font-size:14px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:12px 14px;color:#7a5a16;text-align:center}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#333;color:#fff;border-radius:999px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .25s;z-index:30;pointer-events:none}
 .toast.on{opacity:.92}
 .empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
@@ -62,10 +64,9 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 </style>
 </head>
 <body>
-<div class="top"><div class="ttl" id="ttl"></div></div>
+<div class="top"><div class="ttl" id="ttl">ご予約</div></div>
 
 <main>
-  <div class="hint">HP の「ご予約」に出る画面（デモ）。メニューを選ぶと、そのメニューで予約できる時間だけが出ます。※架空のお店です。入れた予約は本物ではありません</div>
   <div class="card">
     <h2>ご予約</h2><div class="en">RESERVATION</div>
     <b>① メニューを選ぶ</b>
@@ -74,44 +75,25 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
   <div class="card">
     <b>② 日にちと時間を選ぶ</b>
     <div id="custList"><div class="empty">読みこみ中…</div></div>
-    <p class="note" style="margin-top:8px">※完全予約制です。表示のない日・時間は、LINE でご相談ください。</p>
-    <a class="linebtn" id="lineBtn" href="#" onclick="toast('デモのため LINE はつないでいません');return false">LINE で相談する</a>
+    <p class="note" id="custNote" style="margin-top:8px">※完全予約制です。表示のない日・時間は、LINE・お電話でご相談ください。</p>
+    <div class="other" id="other" style="display:none">
+      <div class="t">LINE・お電話でもご予約いただけます</div>
+      <a class="linebtn" id="lineBtn" href="#" target="_blank" rel="noopener" style="display:none">LINE で予約・相談する</a>
+      <a class="telbtn" id="telBtn" href="#" style="display:none"></a>
+    </div>
   </div>
-  <div class="foot">予約カレンダー デモ（Lift-Off）｜<a href="/admin">お店の画面</a></div>
+  <div class="foot" id="foot">予約カレンダー（Lift-Off）</div>
 </main>
 
 <div class="sheet" id="sheet"><div class="box" id="sheetBox"></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
-/* ===== お店ごとの設定（ここだけ書きかえる） ===== */
-var CONFIG = {
-  shopName: "hiyori（架空のお店）",
-  color: {main:"#e58ca0", sub:"#a8834f"},
-  lineUrl: "#",
-  // min＝施術の時間（分）。※デモ用の仮の値
-  menus: [
-    {name:"よもぎ蒸し", min:40, price:"5,500円"},
-    {name:"フェイシャル", min:60, price:"5,500円"},
-    {name:"ボディケア 60分", min:60, price:"6,600円"},
-    {name:"ボディケア 90分", min:90, price:"9,900円"},
-    {name:"脱毛（部位はご相談）", min:60, price:"部位による"}
-  ],
-  bufferMin: 20,          // 片づけ・準備の時間（サーバーの BUFFER_MIN と同じにする）
-  stepMin: 30,            // お客さんが選べる開始時間のきざみ（サーバーの STEP_MIN と同じにする）
-  cancelPolicy: "前日のキャンセルは料金の50%、当日は100%をいただきます。",
-  askEmail: true,
-  formspree: "https://formspree.io/f/xrpeekdb"   // 予約の知らせの送り先（お店のメール）
-};
-/* ================================================= */
-
+var SHOP=null;        // /shop.jsonc（お店ごとの値）
 var DOW=["日","月","火","水","木","金","土"];
-var R=document.documentElement.style;R.setProperty("--main",CONFIG.color.main);R.setProperty("--sub",CONFIG.color.sub);
-document.getElementById("ttl").textContent=CONFIG.shopName+"　予約カレンダー（デモ）";
-
-var todayKey="";
-var hours={};   // "YYYY-MM-DD" -> {s,e}
-var busy={};    // "YYYY-MM-DD" -> [{s,e}]（埋まっている時間。中身は見えない）
+var todayKey="", nowMin=0, cutoff=120, open=true;
+var hours={};         // "YYYY-MM-DD" -> {s,e}
+var busy={};          // "YYYY-MM-DD" -> [{s,e}]（埋まっている時間。中身は見えない）
 var menuSel=0, cur=null;
 
 function parse(k){var a=k.split("-");return new Date(+a[0],+a[1]-1,+a[2])}
@@ -120,48 +102,66 @@ function m2(t){var a=t.split(":");return +a[0]*60+ +a[1]}
 function t2(m){return ("0"+Math.floor(m/60)).slice(-2)+":"+("0"+m%60).slice(-2)}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2200)}
+function stopMsg(t){document.getElementById("custList").innerHTML="<div class='stop'>"+esc(t)+"</div>";document.getElementById("custNote").style.display="none"}
+function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
 
-/* 空いている開始時間：開始〜(施術+片づけ)が営業時間に入り、埋まっている時間と重ならない */
+/* 空いている開始時間：開始〜(施術+片づけ)が営業時間に入り、埋まっている時間と重ならない。今日は、今＋締切より前の時間は出さない */
 function starts(k,min){
   var h=hours[k];if(!h)return [];
   var s=m2(h.s),e=m2(h.e),out=[],bl=busy[k]||[];
-  for(var t=s;t+min<=e;t+=CONFIG.stepMin){
-    var end=t+min+CONFIG.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+  for(var t=s;t+min<=e;t+=SHOP.stepMin){
+    if(k==todayKey&&t<nowMin+cutoff)continue;
+    var end=t+min+SHOP.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
     if(!hit)out.push(t2(t));
   }
   return out;
 }
 
+function applyShop(){
+  var R=document.documentElement.style;R.setProperty("--main",SHOP.color.main);R.setProperty("--sub",SHOP.color.sub);
+  document.title=SHOP.shopName+"　ご予約";
+  document.getElementById("ttl").textContent=SHOP.shopName+"　ご予約";
+  var o=document.getElementById("other"),lb=document.getElementById("lineBtn"),tb=document.getElementById("telBtn");
+  if(SHOP.lineUrl){lb.href=SHOP.lineUrl;lb.style.display="block"}
+  if(SHOP.tel){tb.href="tel:"+String(SHOP.tel).replace(/[^0-9+]/g,"");tb.textContent="電話する　"+SHOP.tel;tb.style.display="block"}
+  if(SHOP.lineUrl||SHOP.tel)o.style.display="block";
+  var w=[];if(SHOP.lineUrl)w.push("LINE");if(SHOP.tel)w.push("お電話");
+  document.getElementById("custNote").textContent="※完全予約制です。表示のない日・時間は、"+(w.length?w.join("・")+"で":"お店に")+"ご相談ください。";
+}
+
 function load(){
-  return fetch("/api/days",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
-    todayKey=d.today;hours={};busy=d.busy||{};
+  return fetch("/api/days",{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("down");return r.json()}).then(function(d){
+    todayKey=d.today;nowMin=m2(d.now||"00:00");cutoff=(d.sameDayCutoffMin===undefined)?120:+d.sameDayCutoffMin;open=d.open!==false;
+    hours={};busy=d.busy||{};
     (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
     renderCust();
-  }).catch(function(){document.getElementById("custList").innerHTML="<div class='empty'>読みこめませんでした。しばらくしてからもう一度お試しください。</div>"});
+  }).catch(function(){stopMsg("ただいまネット予約が使えません。LINE かお電話でお願いします。")});
 }
 
 function renderCust(){
-  document.getElementById("menuList").innerHTML=CONFIG.menus.map(function(m,i){
+  document.getElementById("menuList").innerHTML=SHOP.menus.map(function(m,i){
     return "<button class='"+(i==menuSel?"on":"")+"' onclick='pickMenu("+i+")'><span>"+esc(m.name)+"</span><small>"+m.min+"分"+(m.price?"・"+esc(m.price):"")+"</small></button>"}).join("");
-  var min=CONFIG.menus[menuSel].min;
+  if(!open){stopMsg("ただいまネット予約の準備中です。LINE かお電話でお願いします。");return}
+  var min=SHOP.menus[menuSel].min;
   var ks=Object.keys(hours).sort(),h="";
   ks.forEach(function(k){var st=starts(k,min);
+    if(k==todayKey&&!st.length)return;   // 今日の分がもう受けられないときは出さない
     h+="<div class='day'><div class='dname"+(st.length?"":" full")+"'>"+jp(k)+"</div>";
     if(st.length)h+="<div class='chips'>"+st.map(function(t){return "<button class='chip' onclick=\"openForm('"+k+"','"+t+"')\">"+t+"〜</button>"}).join("")+"</div>";
     else h+="<div class='full-t'>このメニューは満席です</div>";
     h+="</div>"});
-  document.getElementById("custList").innerHTML=h||"<div class='empty'>営業日は準備中です。LINE でご相談ください。</div>";
+  document.getElementById("custList").innerHTML=h||"<div class='empty'>いま予約できる日がありません。LINE・お電話でご相談ください。</div>";
 }
 function pickMenu(i){menuSel=i;renderCust()}
 
 function openForm(k,t){
-  var m=CONFIG.menus[menuSel];cur={k:k,t:t,m:menuSel};
+  var m=SHOP.menus[menuSel];cur={k:k,t:t,m:menuSel};
   document.getElementById("sheetBox").innerHTML=
    "<div class='selbox'>"+jp(k)+"　"+t+"〜"+t2(m2(t)+m.min)+"<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+"</span></div>"+
    "<label class='f'>お名前<span class='req'>必須</span></label><input type='text' id='fName' autocomplete='name' placeholder='例：山田 花子'>"+
    "<label class='f'>電話番号<span class='req'>必須</span></label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
-   (CONFIG.askEmail?"<label class='f'>メールアドレス（確認メールが届きます・任意）</label><input type='email' id='fMail' autocomplete='email'>":"")+
-   "<div class='policy'><b>キャンセルについて</b><br>"+esc(CONFIG.cancelPolicy)+"<br>ご変更・キャンセルは LINE かお電話でお知らせください。<label class='agree'><input type='checkbox' id='fAgree' onchange=\"document.getElementById('fSend').disabled=!this.checked\">キャンセルの決まりを確認しました</label></div>"+
+   (SHOP.askEmail?"<label class='f'>メールアドレス（確認メールが届きます・任意）</label><input type='email' id='fMail' autocomplete='email'>":"")+
+   "<div class='policy'><b>キャンセルについて</b><br>"+esc(SHOP.cancelPolicy)+"<br>ご変更・キャンセルは LINE かお電話でお知らせください。<label class='agree'><input type='checkbox' id='fAgree' onchange=\"document.getElementById('fSend').disabled=!this.checked\">キャンセルの決まりを確認しました</label></div>"+
    "<div class='err' id='fErr'></div><button class='btn main' id='fSend' onclick='send()' disabled>この内容で予約する</button><button class='btn ghost' onclick='closeForm()'>やめる</button>";
   document.getElementById("sheet").classList.add("on");
 }
@@ -169,11 +169,11 @@ function closeForm(){document.getElementById("sheet").classList.remove("on");cur
 document.getElementById("sheet").onclick=function(e){if(e.target.id=="sheet")closeForm()};
 
 function send(){
-  var n=document.getElementById("fName").value.trim(),t=document.getElementById("fTel").value.trim(),ml=CONFIG.askEmail?document.getElementById("fMail").value.trim():"",e=document.getElementById("fErr");
+  var n=document.getElementById("fName").value.trim(),t=document.getElementById("fTel").value.trim(),ml=SHOP.askEmail?document.getElementById("fMail").value.trim():"",e=document.getElementById("fErr");
   if(!n){e.textContent="お名前を入れてください";return}
   if(!/^[0-9\-]{10,13}$/.test(t)){e.textContent="電話番号を数字で入れてください";return}
   if(ml&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ml)){e.textContent="メールアドレスの形を確かめてください";return}
-  var m=CONFIG.menus[cur.m], c=cur, btn=document.getElementById("fSend");
+  var m=SHOP.menus[cur.m], c=cur, btn=document.getElementById("fSend");
   btn.disabled=true;btn.textContent="送っています…";e.textContent="";
   // 1) サーバーに枠を取ってもらう（名前・電話は送らない）
   fetch("/api/book",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({date:c.k,start:c.t,minutes:m.min,menu:m.name})})
@@ -183,9 +183,9 @@ function send(){
     if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
     var when=jp(c.k)+" "+c.t+"〜"+t2(m2(c.t)+m.min);
     // 2) お店へ知らせる（Formspree）。失敗しても予約は取り消さない
-    var fd={_subject:"【予約デモ hiyori】"+when, "日時":when, "メニュー":m.name+"（"+m.min+"分）", "お名前":n, "電話":t, "メール":ml||"（なし）", "キャンセル規定に同意":"はい", "予約の番号":res.body.id||""};
+    var fd={_subject:"【ネット予約 "+SHOP.shopName+"】"+when, "日時":when, "メニュー":m.name+"（"+m.min+"分）", "お名前":n, "電話":t, "メール":ml||"（なし）", "キャンセル規定に同意":"はい", "予約の番号":res.body.id||""};
     if(ml)fd.email=ml;
-    fetch(CONFIG.formspree,{method:"POST",headers:{"content-type":"application/json","Accept":"application/json"},body:JSON.stringify(fd)})
+    fetch(SHOP.formspree,{method:"POST",headers:{"content-type":"application/json","Accept":"application/json"},body:JSON.stringify(fd)})
     .then(function(r){return r.ok}).catch(function(){return false})
     .then(function(sent){
       document.getElementById("sheetBox").innerHTML="<div class='thanks'><div class='big'>✓</div><b>ご予約を受け付けました</b><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p><p class='note'>"+(ml?"確認メールをお送りしました。":"")+"当日お待ちしております。</p>"+
@@ -197,8 +197,8 @@ function send(){
   .catch(function(){e.textContent="通信に失敗しました。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する"});
 }
 
-renderCust();
-load();
+fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(function(t){SHOP=parseJsonc(t);applyShop();renderCust();return load()})
+.catch(function(){stopMsg("ただいまネット予約が使えません。LINE かお電話でお願いします。")});
 </script>
 </body>
 </html>

@@ -4,11 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
-<title>hiyori（架空のお店）お店の画面｜予約カレンダー デモ</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>予約管理</title>
 <!--
-  Lift-Off 部品「予約カレンダー」デモ（2026/10/20）。お店の画面。元は 予約カレンダー_試作2（10月20日版）.html
+  Lift-Off 部品「予約カレンダー」お店の画面（2026/10/20）。お店ごとの値は /shop.jsonc。
   営業日を型で入れる・型を作る直す・予約を見る入れる・予約の型・取り消す・営業時間の変更。
   最初にパスワードを聞き、ブラウザに覚えさせる（localStorage）。API は /api/admin/…（ヘッダー X-Admin-Password）
+  ホーム画面に置くと「〇〇 予約管理」の名前とアイコン（/manifest.webmanifest・/apple-touch-icon.png）
 -->
 <style>
 :root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80}
@@ -81,7 +86,7 @@ details.more summary{cursor:pointer;padding:4px 0}
 </style>
 </head>
 <body>
-<div class="top"><div class="ttl" id="ttl"></div></div>
+<div class="top"><div class="ttl" id="ttl">予約管理</div></div>
 
 <main>
 <section id="login" style="display:none">
@@ -95,7 +100,7 @@ details.more summary{cursor:pointer;padding:4px 0}
 </section>
 
 <section id="app" style="display:none">
-  <div class="hint">お店の人がスマホで使う画面（デモ。ホーム画面にアイコンで置けます）。</div>
+  <div class="hint">お店の人がスマホで使う画面（ホーム画面にアイコンで置けます：共有 → ホーム画面に追加）。</div>
   <div class="card">
     <div class="mode"><button id="mPat" class="on" onclick="setMode('pat')">営業日を入れる</button><button id="mDay" onclick="setMode('day')">予約を見る・入れる</button></div>
     <div id="patBox">
@@ -114,37 +119,13 @@ details.more summary{cursor:pointer;padding:4px 0}
 <div class="toast" id="toast"></div>
 
 <script>
-/* ===== お店ごとの設定（お客さんの画面 index.html と同じにする） ===== */
-var CONFIG = {
-  shopName: "hiyori（架空のお店）",
-  color: {main:"#e58ca0", sub:"#a8834f"},
-  menus: [
-    {name:"よもぎ蒸し", min:40},
-    {name:"フェイシャル", min:60},
-    {name:"ボディケア 60分", min:60},
-    {name:"ボディケア 90分", min:90},
-    {name:"脱毛（部位はご相談）", min:60}
-  ],
-  bufferMin: 20,
-  stepMin: 30,
-  patterns: [
-    {name:"1日",   s:"10:00", e:"18:00"},
-    {name:"午前",   s:"10:00", e:"13:00"},
-    {name:"午後",   s:"13:00", e:"18:00"},
-    {name:"夕方から", s:"17:00", e:"21:00"}
-  ]
-};
-/* ================================================= */
-var PW_KEY="yoyakuDemoAdminPw";
+var SHOP=null;   // /shop.jsonc
+var PW_KEY="yoyakuAdminPw";
 var DOW=["日","月","火","水","木","金","土"];
-var R=document.documentElement.style;R.setProperty("--main",CONFIG.color.main);R.setProperty("--sub",CONFIG.color.sub);
-document.getElementById("ttl").textContent=CONFIG.shopName+"　お店の画面（デモ）";
-
 var today=new Date();today.setHours(0,0,0,0);
 var view=new Date(today.getFullYear(),today.getMonth(),1);
 var hours={}, blocks={}, sel=null, mode="pat", pat=0, editPat=false, editB=false;
-var PATS=CONFIG.patterns.map(function(p){return {name:p.name,s:p.s,e:p.e}});
-var BPATS=CONFIG.menus.map(function(m){return {name:m.name.replace(/（.*?）/,'').replace(/\s*(\d+)分$/,'$1'),min:m.min}});
+var PATS=[], BPATS=[];
 
 function key(d){return d.getFullYear()+"-"+("0"+(d.getMonth()+1)).slice(-2)+"-"+("0"+d.getDate()).slice(-2)}
 function parse(k){var a=k.split("-");return new Date(+a[0],+a[1]-1,+a[2])}
@@ -153,6 +134,7 @@ function m2(t){var a=t.split(":");return +a[0]*60+ +a[1]}
 function t2(m){return ("0"+Math.floor(m/60)).slice(-2)+":"+("0"+m%60).slice(-2)}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2000)}
+function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
 
 /* ---------- パスワードと API ---------- */
 function getPw(){try{return localStorage.getItem(PW_KEY)||""}catch(e){return ""}}
@@ -180,11 +162,12 @@ function start(){
 function reload(){
   return api("all").then(function(d){
     hours={};blocks={};
+    if(d.today){var t=parse(d.today);today=t;}   // 日本時間の今日（サーバーから）
     (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
     (d.blocks||[]).forEach(function(b){(blocks[b.date]=blocks[b.date]||[]).push(b)});
     var st=d.settings||{};
-    if(st.pats&&st.pats.length)PATS=st.pats;
-    if(st.bpats&&st.bpats.length)BPATS=st.bpats;
+    PATS=(st.pats&&st.pats.length)?st.pats:SHOP.patterns.map(function(p){return {name:p.name,s:p.s,e:p.e}});
+    BPATS=(st.bpats&&st.bpats.length)?st.bpats:SHOP.bookPatterns.map(function(p){return {name:p.name,min:p.min}});
     if(pat>=PATS.length)pat=0;
     renderAdmin();
   }).catch(function(e){toast(e.message)});
@@ -194,13 +177,13 @@ function reload(){
 function starts(k,min){
   var h=hours[k];if(!h)return [];
   var s=m2(h.s),e=m2(h.e),out=[],bl=blocks[k]||[];
-  for(var t=s;t+min<=e;t+=CONFIG.stepMin){
-    var end=t+min+CONFIG.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+  for(var t=s;t+min<=e;t+=SHOP.stepMin){
+    var end=t+min+SHOP.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
     if(!hit)out.push(t2(t));
   }
   return out;
 }
-function shortest(){return Math.min.apply(null,CONFIG.menus.map(function(m){return m.min}))}
+function shortest(){return Math.min.apply(null,SHOP.menus.map(function(m){return m.min}))}
 
 /* ---------- 画面 ---------- */
 function setMode(m){mode=m;document.getElementById("mPat").classList.toggle("on",m=="pat");document.getElementById("mDay").classList.toggle("on",m=="day");
@@ -236,7 +219,7 @@ function tapDay(k){
     }
   } else {sel=k;renderAdmin()}
 }
-var tOpts=[];for(var m=6*60;m<=23*60;m+=CONFIG.stepMin)tOpts.push(t2(m));
+var tOpts=[];
 function opts(v){return tOpts.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
 function renderDay(){
   var b=document.getElementById("dayBox");
@@ -250,18 +233,18 @@ function renderDay(){
   h+="<div class='tl'>";
   items.forEach(function(x){
     if(x.free)h+="<div class='ti free'><span>"+x.s+"〜"+x.e+"　空き</span></div>";
-    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>片づけ "+CONFIG.bufferMin+"分込み</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
+    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>片づけ "+SHOP.bufferMin+"分込み</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
   });
   h+="</div>";
   var fs=firstFree()||hh.s;
   h+="<div class='sub'><b>LINE・電話で受けた予約を入れる</b>"+
     "<div class='blk'>始まり <select id='bS' onchange='syncEnd()'>"+opts10(fs)+"</select></div>"+
-    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（片づけ "+CONFIG.bufferMin+"分も自動で）</div><div class='pat'>";
+    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（片づけ "+SHOP.bufferMin+"分も自動で）</div><div class='pat'>";
   BPATS.forEach(function(p){h+="<button onclick='block("+(+p.min)+",\""+esc(p.name)+"\")'>"+esc(p.name)+"<small>"+p.min+"分</small></button>"});
   h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ 予約の型を作る・直す</button>")+"</div>";
   h+="<details class='more' style='margin-top:12px'><summary>終わりの時間を選んで入れる</summary>"+
     "<div class='blk'>〜 <select id='bE'>"+opts10(t2(m2(fs)+60))+"</select></div>"+
-    "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+CONFIG.bufferMin+"分）も入れる</label>"+
+    "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+SHOP.bufferMin+"分）も入れる</label>"+
     "<button class='btn main' style='margin-top:8px' onclick='blockFree()'>この時間で予約を入れる</button></details></div>";
   b.innerHTML=h;
 }
@@ -272,13 +255,13 @@ var t10=[];for(var mm=6*60;mm<=23*60;mm+=10)t10.push(t2(mm));
 function opts10(v){return t10.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
 function syncEnd(){var s=document.getElementById("bS").value,e=document.getElementById("bE");if(!e)return;if(m2(e.value)<=m2(s))e.value=t2(Math.min(m2(s)+60,23*60))}
 function addBlock(s,e,label,menu){var hh=hours[sel];
-  if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+CONFIG.bufferMin){toast("営業時間の外です（営業時間を先に変えてください）");return}
+  if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+SHOP.bufferMin){toast("営業時間の外です（営業時間を先に変えてください）");return}
   api("block","POST",{date:sel,s:s,e:e,menu:menu||""}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
 function blockFree(){var s=document.getElementById("bS").value,e=document.getElementById("bE").value;
   if(m2(e)<=m2(s)){toast("終わりを始まりより後にしてください");return}
-  var buf=document.getElementById("bBuf").checked?CONFIG.bufferMin:0;
+  var buf=document.getElementById("bBuf").checked?SHOP.bufferMin:0;
   addBlock(s,t2(m2(e)+buf),s+"〜"+e+" の予約を入れました","")}
-function block(mn,name){var s=document.getElementById("bS").value;addBlock(s,t2(m2(s)+mn+CONFIG.bufferMin),s+" から "+(name?name+" ":"")+mn+"分の予約を入れました",name)}
+function block(mn,name){var s=document.getElementById("bS").value;addBlock(s,t2(m2(s)+mn+SHOP.bufferMin),s+" から "+(name?name+" ":"")+mn+"分の予約を入れました",name)}
 function unblock(id){api("block","DELETE",{id:id}).then(function(){toast("あけました（HP でまた予約できます）");return reload()}).catch(function(e){toast(e.message)})}
 
 /* 予約の型（お店が変えられる） */
@@ -309,12 +292,18 @@ function addPat(){PATS.push({name:"新しい型",s:"10:00",e:"15:00"});renderAdm
 function delPat(i){if(PATS.length<=1){toast("型は1つ以上いります");return}PATS.splice(i,1);if(pat>=PATS.length)pat=0;renderAdmin()}
 function savePat(){
   for(var i=0;i<PATS.length;i++){var p=PATS[i];if(!p.name.trim()){toast("名前を入れてください");return}if(m2(p.s)>=m2(p.e)){toast("「"+p.name+"」の終わりを始まりより後にしてください");return}}
-  api("settings","POST",{key:"pats",value:PATS}).then(function(){return api("settings","POST",{key:"step",value:CONFIG.stepMin})})
+  api("settings","POST",{key:"pats",value:PATS}).then(function(){return api("settings","POST",{key:"step",value:SHOP.stepMin})})
   .then(function(){editPat=false;renderAdmin();toast("型を保存しました（入れた営業日は変わりません）")}).catch(function(e){toast(e.message)})}
 
-/* ---------- 最初 ---------- */
-if(getPw()){api("login","POST",{}).then(function(){start()}).catch(function(e){showLogin(e.message=="パスワードが違います"?"前のパスワードが使えなくなりました。もう一度入れてください":e.message)})}
-else showLogin("");
+/* ---------- 最初：お店の設定を読む → パスワード ---------- */
+fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(function(t){
+  SHOP=parseJsonc(t);
+  var R=document.documentElement.style;R.setProperty("--main",SHOP.color.main);R.setProperty("--sub",SHOP.color.sub);
+  document.title=SHOP.shopName+" 予約管理";document.getElementById("ttl").textContent=SHOP.shopName+"　予約管理";
+  for(var m=6*60;m<=23*60;m+=SHOP.stepMin)tOpts.push(t2(m));
+  if(getPw()){api("login","POST",{}).then(function(){start()}).catch(function(e){showLogin(e.message=="パスワードが違います"?"前のパスワードが使えなくなりました。もう一度入れてください":e.message)})}
+  else showLogin("");
+}).catch(function(){showLogin("お店の設定（shop.jsonc）が読めません")});
 </script>
 </body>
 </html>
