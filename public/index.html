@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>hiyori（架空のお店）ご予約｜予約カレンダー デモ</title>
+<!--
+  Lift-Off 部品「予約カレンダー」デモ（2026/10/20）。お客さんの画面。元は 予約カレンダー_試作2（10月20日版）.html
+  考え方：お店は「営業時間」だけ入れる → お客さんがメニューを選ぶと、メニューの長さ＋片づけの時間で空いている開始時間が出る → 予約が入るとその分だけ埋まる。
+  サーバー（/api）が持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存せず、この画面から Formspree（お店のメール）へ送る。
+  ほかのお店で使うときは、下の CONFIG だけを書きかえる。
+-->
+<style>
+:root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:15px;line-height:1.6}
+button{font:inherit;cursor:pointer;color:inherit}
+.top{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line)}
+.top .ttl{font-size:12px;color:var(--mute);text-align:center;padding:8px 16px}
+main{max-width:520px;margin:0 auto;padding:14px 16px 60px}
+.card{background:#fff;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h2{font-family:"Hiragino Mincho ProN","Noto Serif JP",serif;font-weight:600;font-size:19px;text-align:center;margin:4px 0 0;letter-spacing:.12em}
+.en{font-size:10px;text-align:center;color:var(--sub);letter-spacing:.25em;margin-bottom:12px}
+.note{font-size:12.5px;color:#7d6a62}
+.hint{font-size:12px;background:var(--soft);border-radius:10px;padding:8px 12px;margin:0 0 12px;color:#7d5a63}
+label.f{display:block;font-size:13px;color:#6b5a52;margin:10px 0 4px}
+.req{color:#d33;font-size:11px;margin-left:4px}
+input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+.menus{display:flex;flex-direction:column;gap:8px}
+.menus button{display:flex;justify-content:space-between;align-items:center;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:11px 12px}
+.menus button.on{border-color:var(--main);background:var(--soft);font-weight:bold}
+.menus button small{color:var(--mute);font-weight:normal;white-space:nowrap;margin-left:8px}
+.day{border-bottom:1px dotted var(--line);padding:12px 0}
+.day:last-child{border-bottom:0}
+.dname{font-weight:bold;margin-bottom:6px}
+.dname.full{color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{border-radius:999px;padding:7px 12px;font-size:14px;border:1px solid var(--okbd);color:var(--ok);background:var(--okbg)}
+.full-t{font-size:13px;color:var(--mute)}
+.linebtn{display:block;text-align:center;background:#06c755;color:#fff;text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:12px}
+.sheet{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(40,30,28,.45);display:none;align-items:flex-end;justify-content:center;z-index:20}
+.sheet.on{display:flex}
+.sheet .box{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:18px 16px 24px;max-height:92vh;overflow:auto}
+.selbox{background:var(--soft);border-radius:12px;padding:10px 12px;margin-bottom:6px;font-weight:bold;text-align:center}
+.policy{font-size:13px;background:#faf7f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:14px}
+.agree{display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:14px}
+.agree input{width:20px;height:20px;margin-top:2px;flex:none}
+.err{color:#d33;font-size:13px;min-height:18px;margin-top:6px}
+.btn{display:block;width:100%;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:bold;margin-top:12px}
+.btn.main{background:var(--main);color:#fff}
+.btn.main:disabled{opacity:.45}
+.btn.ghost{background:#fff;border:1px solid var(--line)}
+.thanks{text-align:center}.thanks .big{font-size:40px;color:var(--main)}
+.warn{font-size:13px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:10px 12px;margin-top:10px;text-align:left;color:#7a5a16}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#333;color:#fff;border-radius:999px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .25s;z-index:30;pointer-events:none}
+.toast.on{opacity:.92}
+.empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
+.foot{font-size:11px;color:var(--mute);text-align:center;margin-top:20px}
+.foot a{color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="top"><div class="ttl" id="ttl"></div></div>
+
+<main>
+  <div class="hint">HP の「ご予約」に出る画面（デモ）。メニューを選ぶと、そのメニューで予約できる時間だけが出ます。※架空のお店です。入れた予約は本物ではありません</div>
+  <div class="card">
+    <h2>ご予約</h2><div class="en">RESERVATION</div>
+    <b>① メニューを選ぶ</b>
+    <div class="menus" id="menuList" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <b>② 日にちと時間を選ぶ</b>
+    <div id="custList"><div class="empty">読みこみ中…</div></div>
+    <p class="note" style="margin-top:8px">※完全予約制です。表示のない日・時間は、LINE でご相談ください。</p>
+    <a class="linebtn" id="lineBtn" href="#" onclick="toast('デモのため LINE はつないでいません');return false">LINE で相談する</a>
+  </div>
+  <div class="foot">予約カレンダー デモ（Lift-Off）｜<a href="/admin">お店の画面</a></div>
+</main>
+
+<div class="sheet" id="sheet"><div class="box" id="sheetBox"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===== お店ごとの設定（ここだけ書きかえる） ===== */
+var CONFIG = {
+  shopName: "hiyori（架空のお店）",
+  color: {main:"#e58ca0", sub:"#a8834f"},
+  lineUrl: "#",
+  // min＝施術の時間（分）。※デモ用の仮の値
+  menus: [
+    {name:"よもぎ蒸し", min:40, price:"5,500円"},
+    {name:"フェイシャル", min:60, price:"5,500円"},
+    {name:"ボディケア 60分", min:60, price:"6,600円"},
+    {name:"ボディケア 90分", min:90, price:"9,900円"},
+    {name:"脱毛（部位はご相談）", min:60, price:"部位による"}
+  ],
+  bufferMin: 20,          // 片づけ・準備の時間（サーバーの BUFFER_MIN と同じにする）
+  stepMin: 30,            // お客さんが選べる開始時間のきざみ（サーバーの STEP_MIN と同じにする）
+  cancelPolicy: "前日のキャンセルは料金の50%、当日は100%をいただきます。",
+  askEmail: true,
+  formspree: "https://formspree.io/f/xrpeekdb"   // 予約の知らせの送り先（お店のメール）
+};
+/* ================================================= */
+
+var DOW=["日","月","火","水","木","金","土"];
+var R=document.documentElement.style;R.setProperty("--main",CONFIG.color.main);R.setProperty("--sub",CONFIG.color.sub);
+document.getElementById("ttl").textContent=CONFIG.shopName+"　予約カレンダー（デモ）";
+
+var todayKey="";
+var hours={};   // "YYYY-MM-DD" -> {s,e}
+var busy={};    // "YYYY-MM-DD" -> [{s,e}]（埋まっている時間。中身は見えない）
+var menuSel=0, cur=null;
+
+function parse(k){var a=k.split("-");return new Date(+a[0],+a[1]-1,+a[2])}
+function jp(k){var d=parse(k);return (d.getMonth()+1)+"月"+d.getDate()+"日（"+DOW[d.getDay()]+"）"}
+function m2(t){var a=t.split(":");return +a[0]*60+ +a[1]}
+function t2(m){return ("0"+Math.floor(m/60)).slice(-2)+":"+("0"+m%60).slice(-2)}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2200)}
+
+/* 空いている開始時間：開始〜(施術+片づけ)が営業時間に入り、埋まっている時間と重ならない */
+function starts(k,min){
+  var h=hours[k];if(!h)return [];
+  var s=m2(h.s),e=m2(h.e),out=[],bl=busy[k]||[];
+  for(var t=s;t+min<=e;t+=CONFIG.stepMin){
+    var end=t+min+CONFIG.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+    if(!hit)out.push(t2(t));
+  }
+  return out;
+}
+
+function load(){
+  return fetch("/api/days",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
+    todayKey=d.today;hours={};busy=d.busy||{};
+    (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
+    renderCust();
+  }).catch(function(){document.getElementById("custList").innerHTML="<div class='empty'>読みこめませんでした。しばらくしてからもう一度お試しください。</div>"});
+}
+
+function renderCust(){
+  document.getElementById("menuList").innerHTML=CONFIG.menus.map(function(m,i){
+    return "<button class='"+(i==menuSel?"on":"")+"' onclick='pickMenu("+i+")'><span>"+esc(m.name)+"</span><small>"+m.min+"分"+(m.price?"・"+esc(m.price):"")+"</small></button>"}).join("");
+  var min=CONFIG.menus[menuSel].min;
+  var ks=Object.keys(hours).sort(),h="";
+  ks.forEach(function(k){var st=starts(k,min);
+    h+="<div class='day'><div class='dname"+(st.length?"":" full")+"'>"+jp(k)+"</div>";
+    if(st.length)h+="<div class='chips'>"+st.map(function(t){return "<button class='chip' onclick=\"openForm('"+k+"','"+t+"')\">"+t+"〜</button>"}).join("")+"</div>";
+    else h+="<div class='full-t'>このメニューは満席です</div>";
+    h+="</div>"});
+  document.getElementById("custList").innerHTML=h||"<div class='empty'>営業日は準備中です。LINE でご相談ください。</div>";
+}
+function pickMenu(i){menuSel=i;renderCust()}
+
+function openForm(k,t){
+  var m=CONFIG.menus[menuSel];cur={k:k,t:t,m:menuSel};
+  document.getElementById("sheetBox").innerHTML=
+   "<div class='selbox'>"+jp(k)+"　"+t+"〜"+t2(m2(t)+m.min)+"<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+"</span></div>"+
+   "<label class='f'>お名前<span class='req'>必須</span></label><input type='text' id='fName' autocomplete='name' placeholder='例：山田 花子'>"+
+   "<label class='f'>電話番号<span class='req'>必須</span></label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
+   (CONFIG.askEmail?"<label class='f'>メールアドレス（確認メールが届きます・任意）</label><input type='email' id='fMail' autocomplete='email'>":"")+
+   "<div class='policy'><b>キャンセルについて</b><br>"+esc(CONFIG.cancelPolicy)+"<br>ご変更・キャンセルは LINE かお電話でお知らせください。<label class='agree'><input type='checkbox' id='fAgree' onchange=\"document.getElementById('fSend').disabled=!this.checked\">キャンセルの決まりを確認しました</label></div>"+
+   "<div class='err' id='fErr'></div><button class='btn main' id='fSend' onclick='send()' disabled>この内容で予約する</button><button class='btn ghost' onclick='closeForm()'>やめる</button>";
+  document.getElementById("sheet").classList.add("on");
+}
+function closeForm(){document.getElementById("sheet").classList.remove("on");cur=null}
+document.getElementById("sheet").onclick=function(e){if(e.target.id=="sheet")closeForm()};
+
+function send(){
+  var n=document.getElementById("fName").value.trim(),t=document.getElementById("fTel").value.trim(),ml=CONFIG.askEmail?document.getElementById("fMail").value.trim():"",e=document.getElementById("fErr");
+  if(!n){e.textContent="お名前を入れてください";return}
+  if(!/^[0-9\-]{10,13}$/.test(t)){e.textContent="電話番号を数字で入れてください";return}
+  if(ml&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ml)){e.textContent="メールアドレスの形を確かめてください";return}
+  var m=CONFIG.menus[cur.m], c=cur, btn=document.getElementById("fSend");
+  btn.disabled=true;btn.textContent="送っています…";e.textContent="";
+  // 1) サーバーに枠を取ってもらう（名前・電話は送らない）
+  fetch("/api/book",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({date:c.k,start:c.t,minutes:m.min,menu:m.name})})
+  .then(function(r){return r.json().then(function(j){return {status:r.status,body:j}})})
+  .then(function(res){
+    if(res.status==409){e.textContent="すみません、たった今ほかの方の予約が入りました。別の時間をお選びください。";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
+    if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
+    var when=jp(c.k)+" "+c.t+"〜"+t2(m2(c.t)+m.min);
+    // 2) お店へ知らせる（Formspree）。失敗しても予約は取り消さない
+    var fd={_subject:"【予約デモ hiyori】"+when, "日時":when, "メニュー":m.name+"（"+m.min+"分）", "お名前":n, "電話":t, "メール":ml||"（なし）", "キャンセル規定に同意":"はい", "予約の番号":res.body.id||""};
+    if(ml)fd.email=ml;
+    fetch(CONFIG.formspree,{method:"POST",headers:{"content-type":"application/json","Accept":"application/json"},body:JSON.stringify(fd)})
+    .then(function(r){return r.ok}).catch(function(){return false})
+    .then(function(sent){
+      document.getElementById("sheetBox").innerHTML="<div class='thanks'><div class='big'>✓</div><b>ご予約を受け付けました</b><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p><p class='note'>"+(ml?"確認メールをお送りしました。":"")+"当日お待ちしております。</p>"+
+        (sent?"":"<div class='warn'>お店への連絡が届かなかったかもしれません。LINE か電話でもお知らせください。</div>")+
+        "<button class='btn main' onclick='closeForm()'>とじる</button></div>";
+      load();
+    });
+  })
+  .catch(function(){e.textContent="通信に失敗しました。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する"});
+}
+
+renderCust();
+load();
+</script>
+</body>
+</html>

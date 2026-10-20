@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>hiyori（架空のお店）お店の画面｜予約カレンダー デモ</title>
+<!--
+  Lift-Off 部品「予約カレンダー」デモ（2026/10/20）。お店の画面。元は 予約カレンダー_試作2（10月20日版）.html
+  営業日を型で入れる・型を作る直す・予約を見る入れる・予約の型・取り消す・営業時間の変更。
+  最初にパスワードを聞き、ブラウザに覚えさせる（localStorage）。API は /api/admin/…（ヘッダー X-Admin-Password）
+-->
+<style>
+:root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:15px;line-height:1.6}
+button{font:inherit;cursor:pointer;color:inherit}
+.top{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line)}
+.top .ttl{font-size:12px;color:var(--mute);text-align:center;padding:8px 16px}
+main{max-width:520px;margin:0 auto;padding:14px 16px 60px}
+.card{background:#fff;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.note{font-size:12.5px;color:#7d6a62}
+.hint{font-size:12px;background:var(--soft);border-radius:10px;padding:8px 12px;margin:0 0 12px;color:#7d5a63}
+label.f{display:block;font-size:13px;color:#6b5a52;margin:10px 0 4px}
+input[type=text],input[type=password],select{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+.agree{display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:14px}
+.agree input{width:20px;height:20px;margin-top:2px;flex:none}
+.err{color:#d33;font-size:13px;min-height:18px;margin-top:6px}
+.btn{display:block;width:100%;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:bold;margin-top:12px}
+.btn.main{background:var(--main);color:#fff}
+.btn.ghost{background:#fff;border:1px solid var(--line)}
+.pat{display:flex;gap:6px;flex-wrap:wrap}
+.pat button{border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 10px;font-size:13px;text-align:center;flex:1 1 28%}
+.pat button small{display:block;font-size:11px;color:var(--mute)}
+.pat button.on{border-color:var(--main);background:var(--main);color:#fff}
+.pat button.on small{color:#fff}
+.pat button.off.on{background:#7d6a62;border-color:#7d6a62}
+.mode{display:flex;gap:6px;margin-bottom:10px}
+.mode button{flex:1;border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px;font-size:14px}
+.mode button.on{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:bold}
+.month-h{display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px}
+.month-h button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:4px 10px}
+.month{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.dow{font-size:11px;text-align:center;color:var(--mute)}.dow.sun{color:#d77}.dow.sat{color:#68a}
+.dc{height:50px;border:1px solid var(--line);background:#fff;border-radius:9px;font-size:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0}
+.dc.open{background:var(--soft);border-color:var(--main)}
+.dc.full{background:#efe9e6;border-color:#c9bcb6}
+.dc.sel{outline:2px solid var(--sub);outline-offset:1px}
+.dc.past{opacity:.35}
+.dc small{font-size:9px;line-height:1.15;color:var(--main)}
+.dc small.bk{color:#e53935;font-weight:bold}
+.dc small.fl{color:#7d6a62;font-weight:bold}
+.hours{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}
+.hours select{width:auto;font-size:15px;padding:7px}
+.tl{margin-top:10px}
+.ti{display:flex;justify-content:space-between;align-items:center;gap:8px;border-radius:10px;padding:9px 11px;margin-top:6px;font-size:14px}
+.ti.net{background:#fff4f4;border:1px solid #f0b9b9}
+.ti.man{background:#f3efec;border:1px solid #d9cec8}
+.ti.free{background:var(--okbg);border:1px dashed var(--okbd);color:var(--ok)}
+.ti button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 8px;font-size:12px;white-space:nowrap}
+.blk{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.blk select{width:auto;font-size:15px;padding:7px}
+.smallbtn{border:1px solid var(--sub);color:var(--sub);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px}
+.pe{border:1px solid var(--line);border-radius:12px;padding:10px;background:#fffdfb}
+.pe .r{display:flex;gap:4px;align-items:center;flex-wrap:nowrap;padding:6px 0;border-bottom:1px dotted var(--line)}
+.pe .r:last-of-type{border-bottom:0}
+.pe input[type=text]{width:auto;flex:1 1 4em;min-width:0;font-size:15px;padding:7px 6px}
+.pe select{width:auto;flex:none;font-size:15px;padding:6px 2px}
+.pe .x{flex:none;border:1px solid #ddd;background:#fff;border-radius:8px;padding:6px 9px;color:#999;font-size:13px}
+.pe .acts{display:flex;gap:8px;margin-top:10px}
+.pe .acts button{flex:1;border-radius:10px;padding:9px;font-size:14px;font-weight:bold}
+details.more{font-size:13px;color:#7d6a62}
+details.more summary{cursor:pointer;padding:4px 0}
+.sub{border-top:1px dashed var(--line);margin-top:14px;padding-top:12px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#333;color:#fff;border-radius:999px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .25s;z-index:30;pointer-events:none}
+.toast.on{opacity:.92}
+.empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
+.foot{font-size:11px;color:var(--mute);text-align:center;margin-top:20px}
+.foot a{color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="top"><div class="ttl" id="ttl"></div></div>
+
+<main>
+<section id="login" style="display:none">
+  <div class="card">
+    <b>お店の画面</b>
+    <p class="note">パスワードを入れると、このスマホ（ブラウザ）に覚えさせます。</p>
+    <label class="f">パスワード</label><input type="password" id="pw" autocomplete="current-password">
+    <div class="err" id="pwErr"></div>
+    <button class="btn main" onclick="doLogin()">入る</button>
+  </div>
+</section>
+
+<section id="app" style="display:none">
+  <div class="hint">お店の人がスマホで使う画面（デモ。ホーム画面にアイコンで置けます）。</div>
+  <div class="card">
+    <div class="mode"><button id="mPat" class="on" onclick="setMode('pat')">営業日を入れる</button><button id="mDay" onclick="setMode('day')">予約を見る・入れる</button></div>
+    <div id="patBox">
+      <div class="note" style="margin-bottom:6px">型を選んで、日にちを続けて押すだけ。（「休み」で消せます）</div>
+      <div class="pat" id="pat"></div>
+      <div id="patEdit" style="margin-top:8px"></div>
+    </div>
+    <div class="month-h"><button onclick="moveMonth(-1)">‹</button><b id="mTitle"></b><button onclick="moveMonth(1)">›</button></div>
+    <div class="month" id="month"></div>
+    <p class="note" style="margin-top:8px">ピンク＝営業日（時間を表示）／灰色＝もう予約できない／<span style="color:#e53935">●</span>＝ネット予約あり</p>
+  </div>
+  <div class="card" id="dayBox" style="display:none"></div>
+  <div class="foot"><a href="/">お客さんの画面</a>｜<a href="#" onclick="logout();return false">このスマホから出る</a></div>
+</section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===== お店ごとの設定（お客さんの画面 index.html と同じにする） ===== */
+var CONFIG = {
+  shopName: "hiyori（架空のお店）",
+  color: {main:"#e58ca0", sub:"#a8834f"},
+  menus: [
+    {name:"よもぎ蒸し", min:40},
+    {name:"フェイシャル", min:60},
+    {name:"ボディケア 60分", min:60},
+    {name:"ボディケア 90分", min:90},
+    {name:"脱毛（部位はご相談）", min:60}
+  ],
+  bufferMin: 20,
+  stepMin: 30,
+  patterns: [
+    {name:"1日",   s:"10:00", e:"18:00"},
+    {name:"午前",   s:"10:00", e:"13:00"},
+    {name:"午後",   s:"13:00", e:"18:00"},
+    {name:"夕方から", s:"17:00", e:"21:00"}
+  ]
+};
+/* ================================================= */
+var PW_KEY="yoyakuDemoAdminPw";
+var DOW=["日","月","火","水","木","金","土"];
+var R=document.documentElement.style;R.setProperty("--main",CONFIG.color.main);R.setProperty("--sub",CONFIG.color.sub);
+document.getElementById("ttl").textContent=CONFIG.shopName+"　お店の画面（デモ）";
+
+var today=new Date();today.setHours(0,0,0,0);
+var view=new Date(today.getFullYear(),today.getMonth(),1);
+var hours={}, blocks={}, sel=null, mode="pat", pat=0, editPat=false, editB=false;
+var PATS=CONFIG.patterns.map(function(p){return {name:p.name,s:p.s,e:p.e}});
+var BPATS=CONFIG.menus.map(function(m){return {name:m.name.replace(/（.*?）/,'').replace(/\s*(\d+)分$/,'$1'),min:m.min}});
+
+function key(d){return d.getFullYear()+"-"+("0"+(d.getMonth()+1)).slice(-2)+"-"+("0"+d.getDate()).slice(-2)}
+function parse(k){var a=k.split("-");return new Date(+a[0],+a[1]-1,+a[2])}
+function jp(k){var d=parse(k);return (d.getMonth()+1)+"月"+d.getDate()+"日（"+DOW[d.getDay()]+"）"}
+function m2(t){var a=t.split(":");return +a[0]*60+ +a[1]}
+function t2(m){return ("0"+Math.floor(m/60)).slice(-2)+":"+("0"+m%60).slice(-2)}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2000)}
+
+/* ---------- パスワードと API ---------- */
+function getPw(){try{return localStorage.getItem(PW_KEY)||""}catch(e){return ""}}
+function api(path,method,body){
+  return fetch("/api/admin/"+path,{method:method||"GET",headers:{"content-type":"application/json","X-Admin-Password":getPw()},body:body?JSON.stringify(body):undefined,cache:"no-store"})
+  .then(function(r){return r.json().catch(function(){return {}}).then(function(j){
+    if(r.status==401){logout();throw new Error("パスワードが違います");}
+    if(!r.ok)throw new Error(j.error||("エラー "+r.status));
+    return j})});
+}
+function showLogin(msg){document.getElementById("login").style.display="block";document.getElementById("app").style.display="none";document.getElementById("pwErr").textContent=msg||"";}
+function doLogin(){
+  var v=document.getElementById("pw").value;
+  if(!v){document.getElementById("pwErr").textContent="パスワードを入れてください";return}
+  try{localStorage.setItem(PW_KEY,v)}catch(e){}
+  api("login","POST",{}).then(function(){start()}).catch(function(e){try{localStorage.removeItem(PW_KEY)}catch(x){}showLogin(e.message)});
+}
+function logout(){try{localStorage.removeItem(PW_KEY)}catch(e){}showLogin("");}
+document.getElementById("pw").addEventListener("keydown",function(e){if(e.key=="Enter")doLogin()});
+
+function start(){
+  document.getElementById("login").style.display="none";document.getElementById("app").style.display="block";
+  return reload();
+}
+function reload(){
+  return api("all").then(function(d){
+    hours={};blocks={};
+    (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
+    (d.blocks||[]).forEach(function(b){(blocks[b.date]=blocks[b.date]||[]).push(b)});
+    var st=d.settings||{};
+    if(st.pats&&st.pats.length)PATS=st.pats;
+    if(st.bpats&&st.bpats.length)BPATS=st.bpats;
+    if(pat>=PATS.length)pat=0;
+    renderAdmin();
+  }).catch(function(e){toast(e.message)});
+}
+
+/* 空いている開始時間（お客さんの画面と同じ計算） */
+function starts(k,min){
+  var h=hours[k];if(!h)return [];
+  var s=m2(h.s),e=m2(h.e),out=[],bl=blocks[k]||[];
+  for(var t=s;t+min<=e;t+=CONFIG.stepMin){
+    var end=t+min+CONFIG.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+    if(!hit)out.push(t2(t));
+  }
+  return out;
+}
+function shortest(){return Math.min.apply(null,CONFIG.menus.map(function(m){return m.min}))}
+
+/* ---------- 画面 ---------- */
+function setMode(m){mode=m;document.getElementById("mPat").classList.toggle("on",m=="pat");document.getElementById("mDay").classList.toggle("on",m=="day");
+  document.getElementById("patBox").style.display=m=="pat"?"block":"none";
+  if(m=="day"&&!sel){var ks=Object.keys(hours).filter(function(k){return parse(k)>=today}).sort();sel=ks[0]||null}
+  renderAdmin()}
+function moveMonth(n){view=new Date(view.getFullYear(),view.getMonth()+n,1);renderAdmin()}
+function renderAdmin(){
+  var ph="";PATS.forEach(function(p,i){ph+="<button class='"+(pat==i?"on":"")+"' onclick='pat="+i+";renderAdmin()'>"+esc(p.name)+"<small>"+p.s+"〜"+p.e+"</small></button>"});
+  ph+="<button class='off "+(pat==-1?"on":"")+"' onclick='pat=-1;renderAdmin()'>休み<small>消す</small></button>";
+  document.getElementById("pat").innerHTML=ph;
+  document.getElementById("patEdit").innerHTML=editPat?patEditor():"<button class='smallbtn' onclick='editPat=true;renderAdmin()'>✎ 型を作る・直す</button>";
+  document.getElementById("mTitle").textContent=view.getFullYear()+"年"+(view.getMonth()+1)+"月";
+  var h="";DOW.forEach(function(w,i){h+="<div class='dow"+(i==0?" sun":i==6?" sat":"")+"'>"+w+"</div>"});
+  var first=view.getDay(),n=new Date(view.getFullYear(),view.getMonth()+1,0).getDate();
+  for(var i=0;i<first;i++)h+="<div></div>";
+  var sm=shortest();
+  for(var d=1;d<=n;d++){
+    var dt=new Date(view.getFullYear(),view.getMonth(),d),k=key(dt),hh=hours[k],past=dt<today;
+    var net=(blocks[k]||[]).some(function(b){return b.kind=="net"}),full=hh&&starts(k,sm).length==0;
+    var mk=hh?((net?"<small class='bk'>●予約</small>":"")+(full?"<small class='fl'>満席</small>":"<small>"+hh.s.replace(":00","")+"-"+hh.e.replace(":00","")+"</small>")):"";
+    h+="<button class='dc"+(hh?(full?" full":" open"):"")+(mode=="day"&&k==sel?" sel":"")+(past?" past":"")+"' "+(past?"disabled":"onclick=\"tapDay('"+k+"')\"")+">"+d+mk+"</button>";
+  }
+  document.getElementById("month").innerHTML=h;
+  renderDay();
+}
+function tapDay(k){
+  if(mode=="pat"){
+    if(pat==-1){
+      api("hours","DELETE",{date:k}).then(function(){toast(jp(k)+" を休みにしました");return reload()}).catch(function(e){toast(e.message)});
+    } else {var p=PATS[pat];
+      api("hours","POST",{date:k,s:p.s,e:p.e}).then(function(){toast(jp(k)+" "+p.s+"〜"+p.e);return reload()}).catch(function(e){toast(e.message)});
+    }
+  } else {sel=k;renderAdmin()}
+}
+var tOpts=[];for(var m=6*60;m<=23*60;m+=CONFIG.stepMin)tOpts.push(t2(m));
+function opts(v){return tOpts.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
+function renderDay(){
+  var b=document.getElementById("dayBox");
+  if(mode!="day"||!sel){b.style.display="none";return}
+  b.style.display="block";var hh=hours[sel];
+  if(!hh){b.innerHTML="<b>"+jp(sel)+"</b><div class='empty'>この日は休みです。「営業日を入れる」で型を当ててください。</div>";return}
+  var h="<b>"+jp(sel)+"</b><div class='hours'>営業時間 <select onchange='chH(\"s\",this.value)'>"+opts(hh.s)+"</select>〜<select onchange='chH(\"e\",this.value)'>"+opts(hh.e)+"</select></div>";
+  var bl=(blocks[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1}),t=hh.s,items=[];
+  bl.forEach(function(x){if(m2(x.s)>m2(t))items.push({free:1,s:t,e:x.s});items.push(x);if(m2(x.e)>m2(t))t=x.e});
+  if(m2(hh.e)>m2(t))items.push({free:1,s:t,e:hh.e});
+  h+="<div class='tl'>";
+  items.forEach(function(x){
+    if(x.free)h+="<div class='ti free'><span>"+x.s+"〜"+x.e+"　空き</span></div>";
+    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>片づけ "+CONFIG.bufferMin+"分込み</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
+  });
+  h+="</div>";
+  var fs=firstFree()||hh.s;
+  h+="<div class='sub'><b>LINE・電話で受けた予約を入れる</b>"+
+    "<div class='blk'>始まり <select id='bS' onchange='syncEnd()'>"+opts10(fs)+"</select></div>"+
+    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（片づけ "+CONFIG.bufferMin+"分も自動で）</div><div class='pat'>";
+  BPATS.forEach(function(p){h+="<button onclick='block("+(+p.min)+",\""+esc(p.name)+"\")'>"+esc(p.name)+"<small>"+p.min+"分</small></button>"});
+  h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ 予約の型を作る・直す</button>")+"</div>";
+  h+="<details class='more' style='margin-top:12px'><summary>終わりの時間を選んで入れる</summary>"+
+    "<div class='blk'>〜 <select id='bE'>"+opts10(t2(m2(fs)+60))+"</select></div>"+
+    "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+CONFIG.bufferMin+"分）も入れる</label>"+
+    "<button class='btn main' style='margin-top:8px' onclick='blockFree()'>この時間で予約を入れる</button></details></div>";
+  b.innerHTML=h;
+}
+function firstFree(){var st=starts(sel,shortest());return st[0]}
+function chH(w,v){var hh=hours[sel],n={s:hh.s,e:hh.e};n[w]=v;if(m2(n.s)>=m2(n.e)){toast("終わりを始まりより後にしてください");renderAdmin();return}
+  api("hours","POST",{date:sel,s:n.s,e:n.e}).then(function(){toast("営業時間を変えました");return reload()}).catch(function(e){toast(e.message);renderAdmin()})}
+var t10=[];for(var mm=6*60;mm<=23*60;mm+=10)t10.push(t2(mm));
+function opts10(v){return t10.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
+function syncEnd(){var s=document.getElementById("bS").value,e=document.getElementById("bE");if(!e)return;if(m2(e.value)<=m2(s))e.value=t2(Math.min(m2(s)+60,23*60))}
+function addBlock(s,e,label,menu){var hh=hours[sel];
+  if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+CONFIG.bufferMin){toast("営業時間の外です（営業時間を先に変えてください）");return}
+  api("block","POST",{date:sel,s:s,e:e,menu:menu||""}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
+function blockFree(){var s=document.getElementById("bS").value,e=document.getElementById("bE").value;
+  if(m2(e)<=m2(s)){toast("終わりを始まりより後にしてください");return}
+  var buf=document.getElementById("bBuf").checked?CONFIG.bufferMin:0;
+  addBlock(s,t2(m2(e)+buf),s+"〜"+e+" の予約を入れました","")}
+function block(mn,name){var s=document.getElementById("bS").value;addBlock(s,t2(m2(s)+mn+CONFIG.bufferMin),s+" から "+(name?name+" ":"")+mn+"分の予約を入れました",name)}
+function unblock(id){api("block","DELETE",{id:id}).then(function(){toast("あけました（HP でまた予約できます）");return reload()}).catch(function(e){toast(e.message)})}
+
+/* 予約の型（お店が変えられる） */
+var lens=[];for(var L=10;L<=240;L+=10)lens.push(L);
+function bpatEditor(){
+  var h="<div class='pe'><div class='note' style='margin-bottom:4px'>よく受ける予約の名前と長さです（最大8つ）。</div>";
+  BPATS.forEach(function(p,i){h+="<div class='r'><input type='text' value='"+esc(p.name)+"' maxlength='10' oninput='BPATS["+i+"].name=this.value'>"+
+    "<select onchange='BPATS["+i+"].min=+this.value'>"+lens.map(function(l){return "<option value='"+l+"'"+(l==p.min?" selected":"")+">"+l+"分</option>"}).join("")+"</select>"+
+    "<button class='x' onclick='delBpat("+i+")'>✕</button></div>"});
+  h+="<div class='acts'>"+(BPATS.length<8?"<button style='border:1px solid var(--main);color:var(--main);background:#fff' onclick='BPATS.push({name:\"新しい型\",min:60});renderDay()'>＋ 型を足す</button>":"")+
+     "<button style='border:0;background:var(--main);color:#fff' onclick='saveBpat()'>完了</button></div></div>";return h}
+function delBpat(i){if(BPATS.length<=1){toast("型は1つ以上いります");return}BPATS.splice(i,1);renderDay()}
+function saveBpat(){for(var i=0;i<BPATS.length;i++)if(!BPATS[i].name.trim()){toast("名前を入れてください");return}
+  api("settings","POST",{key:"bpats",value:BPATS}).then(function(){editB=false;renderDay();toast("予約の型を保存しました")}).catch(function(e){toast(e.message)})}
+
+/* 営業日の型（お店が変えられる） */
+function patEditor(){
+  var h="<div class='pe'><div class='note' style='margin-bottom:4px'>名前と時間を変えられます。よく使う形を作っておくと、毎月の入力が速くなります（最大6つ）。</div>";
+  PATS.forEach(function(p,i){
+    h+="<div class='r'><input type='text' value='"+esc(p.name)+"' maxlength='6' oninput='PATS["+i+"].name=this.value'>"+
+       "<select onchange='PATS["+i+"].s=this.value'>"+opts(p.s)+"</select>〜<select onchange='PATS["+i+"].e=this.value'>"+opts(p.e)+"</select>"+
+       "<button class='x' onclick='delPat("+i+")'>✕</button></div>"});
+  h+="<div class='acts'>"+(PATS.length<6?"<button style='border:1px solid var(--main);color:var(--main);background:#fff' onclick='addPat()'>＋ 型を足す</button>":"")+
+     "<button style='border:0;background:var(--main);color:#fff' onclick='savePat()'>完了</button></div></div>";
+  return h;
+}
+function addPat(){PATS.push({name:"新しい型",s:"10:00",e:"15:00"});renderAdmin()}
+function delPat(i){if(PATS.length<=1){toast("型は1つ以上いります");return}PATS.splice(i,1);if(pat>=PATS.length)pat=0;renderAdmin()}
+function savePat(){
+  for(var i=0;i<PATS.length;i++){var p=PATS[i];if(!p.name.trim()){toast("名前を入れてください");return}if(m2(p.s)>=m2(p.e)){toast("「"+p.name+"」の終わりを始まりより後にしてください");return}}
+  api("settings","POST",{key:"pats",value:PATS}).then(function(){return api("settings","POST",{key:"step",value:CONFIG.stepMin})})
+  .then(function(){editPat=false;renderAdmin();toast("型を保存しました（入れた営業日は変わりません）")}).catch(function(e){toast(e.message)})}
+
+/* ---------- 最初 ---------- */
+if(getPw()){api("login","POST",{}).then(function(){start()}).catch(function(e){showLogin(e.message=="パスワードが違います"?"前のパスワードが使えなくなりました。もう一度入れてください":e.message)})}
+else showLogin("");
+</script>
+</body>
+</html>

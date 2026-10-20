@@ -1,0 +1,25 @@
+// Cloudflare Workers の設定（予約カレンダーのデモ・架空のお店 hiyori）2026/10/20
+// 画面（public/）はそのまま置き、/api/… だけ src/worker.js が受ける。保存は D1（データベース）
+{
+  "name": "yoyaku-demo",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  // データベース（D1）。database_id は Cloudflare で作った yoyaku-demo の値（2026/10/20 チャットが作成）
+  // 表は worker.js が最初のリクエストで CREATE TABLE IF NOT EXISTS で作る（schema.sql は同じ内容の控え）
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "yoyaku-demo",
+      "database_id": "2a1301e1-0ec5-4fd8-b480-4102a7d0a79f"
+    }
+  ],
+  // ブランチごとの確認用ページ（プレビュー）
+  "previews": {}
+}
+// 秘密の値（お店の画面のパスワード）はここに書かない：
+//   本番  … npx wrangler secret put ADMIN_PASSWORD
+//   手元  … .dev.vars に ADMIN_PASSWORD=〇〇（git には入れない）

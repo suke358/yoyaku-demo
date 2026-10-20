@@ -1,0 +1,2 @@
+# 手元（wrangler dev）で使う秘密の値。このファイルを .dev.vars という名前で複製して値を入れる（.dev.vars は git に入らない）
+ADMIN_PASSWORD=ここにお店の画面のパスワード
