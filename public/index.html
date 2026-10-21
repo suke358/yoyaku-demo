@@ -72,6 +72,7 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 <main>
   <div class="card">
     <h2>ご予約</h2><div class="en">RESERVATION</div>
+    <p class="note" id="topNote" style="display:none;margin:0 0 10px"></p>
     <b>① メニューを選ぶ</b>
     <div class="menus" id="menuList" style="margin-top:8px"></div>
     <div id="otherMenus" style="display:none;margin-top:12px"><p class="note" id="otherMenusNote" style="margin:0 0 6px"></p><a class="linebtn" id="otherLine" href="#" target="_blank" rel="noopener" style="margin-top:0">LINE で相談する</a></div>
@@ -109,13 +110,16 @@ function toast(t){var e=document.getElementById("toast");e.textContent=t;e.class
 function stopMsg(t){document.getElementById("custList").innerHTML="<div class='stop'>"+esc(t)+"</div>";document.getElementById("custNote").style.display="none"}
 function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
 
-/* 空いている開始時間：開始〜(施術+片づけ)が営業時間に入り、埋まっている時間と重ならない。今日は、今＋締切より前の時間は出さない */
-function starts(k,min){
+/* 予約1回の長さ（枠をふさぐ分）：メニューの slot か、前の時間＋施術＋後の時間（サーバーと同じ計算。2026/10/21） */
+function slotOf(m){return +m.slot||((+SHOP.preMin||0)+(+m.min)+(+SHOP.bufferMin||0))}
+/* 空いている開始時間：来店〜（予約1回の長さ）が営業時間に入り、埋まっている時間（予約・予約停止）と重ならない。今日は、今＋締切より前の時間は出さない */
+function starts(k,menu){
   var h=hours[k];if(!h)return [];
+  var slot=slotOf(menu);
   var s=m2(h.s),e=m2(h.e),out=[],bl=busy[k]||[];
-  for(var t=s;t+min<=e;t+=SHOP.stepMin){
+  for(var t=s;t+slot<=e;t+=SHOP.stepMin){
     if(k==todayKey&&t<nowMin+cutoff)continue;
-    var end=t+min+SHOP.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+    var end=t+slot, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
     if(!hit)out.push(t2(t));
   }
   return out;
@@ -129,6 +133,7 @@ function applyShop(){
   if(SHOP.lineUrl){lb.href=SHOP.lineUrl;lb.style.display="block"}
   if(SHOP.tel){tb.href="tel:"+String(SHOP.tel).replace(/[^0-9+]/g,"");tb.textContent="電話する　"+SHOP.tel;tb.style.display="block"}
   if(SHOP.lineUrl||SHOP.tel)o.style.display="block";
+  if(SHOP.topNote){var tn=document.getElementById("topNote");tn.textContent=SHOP.topNote;tn.style.display="block"}
   if(SHOP.otherMenusNote){document.getElementById("otherMenusNote").textContent=SHOP.otherMenusNote;var ol=document.getElementById("otherLine");if(SHOP.lineUrl)ol.href=SHOP.lineUrl;else ol.style.display="none";document.getElementById("otherMenus").style.display="block"}
   var w=[];if(SHOP.lineUrl)w.push("LINE");if(SHOP.tel)w.push("お電話");
   document.getElementById("custNote").textContent="※完全予約制です。表示のない日・時間は、"+(w.length?w.join("・")+"で":"お店に")+"ご相談ください。";
@@ -147,9 +152,9 @@ function renderCust(){
   document.getElementById("menuList").innerHTML=SHOP.menus.map(function(m,i){
     return "<button class='"+(i==menuSel?"on":"")+"' onclick='pickMenu("+i+")'><span>"+esc(m.name)+"</span><small>"+m.min+"分"+(m.price?"・"+esc(m.price):"")+"</small></button>"}).join("");
   if(!open){stopMsg("ただいまネット予約の準備中です。LINE かお電話でお願いします。");return}
-  var min=SHOP.menus[menuSel].min;
+  var menu=SHOP.menus[menuSel];
   var ks=Object.keys(hours).sort(),h="";
-  ks.forEach(function(k){var st=starts(k,min);
+  ks.forEach(function(k){var st=starts(k,menu);
     if(k==todayKey&&!st.length)return;   // 今日の分がもう受けられないときは出さない
     h+="<div class='day'><div class='dname"+(st.length?"":" full")+"'>"+jp(k)+"</div>";
     if(st.length)h+="<div class='chips'>"+st.map(function(t){return "<button class='chip' onclick=\"openForm('"+k+"','"+t+"')\">"+t+"〜</button>"}).join("")+"</div>";
@@ -162,7 +167,7 @@ function pickMenu(i){menuSel=i;renderCust()}
 function openForm(k,t){
   var m=SHOP.menus[menuSel];cur={k:k,t:t,m:menuSel};
   document.getElementById("sheetBox").innerHTML=
-   "<div class='selbox'>"+jp(k)+"　"+t+"〜"+t2(m2(t)+m.min)+"<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+"</span></div>"+
+   "<div class='selbox'>"+jp(k)+"　"+t+"〜<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+(slotOf(m)!=m.min?"<br><small>所要 約"+slotOf(m)+"分（カウンセリング・お片づけを含む）</small>":"")+"</span></div>"+
    "<label class='f'>お名前<span class='req'>必須</span></label><input type='text' id='fName' autocomplete='name' placeholder='例：山田 花子'>"+
    "<label class='f'>電話番号<span class='req'>必須</span></label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
    "<label class='f'>メールアドレス<span class='req'>必須</span></label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'><p class='note' style='margin:4px 0 0'>確認メールをお送りします。お間違いのないようにご入力ください。</p>"+
@@ -181,14 +186,14 @@ function send(){
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ml)){e.textContent="メールアドレスの形を確かめてください";return}
   var m=SHOP.menus[cur.m], c=cur, btn=document.getElementById("fSend");
   btn.disabled=true;btn.textContent="送っています…";e.textContent="";
-  var body={date:c.k,start:c.t,minutes:m.min,menu:m.name,name:n,tel:t,email:ml};   // サーバーが枠を取り、メールを送る（名前・電話・メールは保存しない）
+  var body={date:c.k,start:c.t,menu:m.name,name:n,tel:t,email:ml};   // 枠の長さはサーバーがメニューから決める   // サーバーが枠を取り、メールを送る（名前・電話・メールは保存しない）
   fetch("/api/book",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
   .then(function(r){return r.json().then(function(j){return {status:r.status,body:j}})})
   .then(function(res){
     if(res.status==409){e.textContent="すみません、たった今ほかの方の予約が入りました。別の時間をお選びください。";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
     if(res.status==502){e.innerHTML="<div class='warn'>"+esc((res.body&&res.body.error)||"ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください")+"</div>";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
     if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
-    var when=jp(c.k)+" "+c.t+"〜"+t2(m2(c.t)+m.min);
+    var when=jp(c.k)+" "+c.t+"〜";
     var h="<div class='thanks'><div class='big'>✓</div><b>ご予約を受け付けました</b><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p>";
     if(res.body&&res.body.demo){
       // デモ：メールは送っていない。本番で届くメールの見本を出す

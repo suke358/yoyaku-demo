@@ -8,13 +8,13 @@
 // デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
 //
 // GET  /api/days                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
-// POST /api/book {date,start,minutes,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる（片づけ bufferMin を足す）。重なったら 409
+// POST /api/book {date,start,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu つき）・settings
 //   POST   /api/admin/hours  {date,s,e}          営業時間を入れる・変える
 //   DELETE /api/admin/hours  {date}              休みにする（ネット予約がある日は 409）
-//   POST   /api/admin/block  {date,s,e}          LINE・電話の予約を入れる（重なったら 409）
+//   POST   /api/admin/block  {date,s,e[,menu,kind]} LINE・電話の予約（kind man）か 予約停止（kind stop）を入れる（重なったら 409）
 //   DELETE /api/admin/block  {id}                予約を取り消す（あける）
 //   POST   /api/admin/settings {key,value}       型などを保存（value は JSON）
 // GET  /manifest.webmanifest・/apple-touch-icon.png  お店の画面をホーム画面に置くときの名前とアイコン
@@ -26,7 +26,8 @@ function parseJsonc(t) {
   return JSON.parse(t.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 }
 var SHOP = parseJsonc(shopText);
-var BUFFER_MIN = +SHOP.bufferMin || 20;
+var BUFFER_MIN = +SHOP.bufferMin || 0;   // 施術のあとに空ける時間（片づけ）
+var PRE_MIN = +SHOP.preMin || 0;        // 施術の前に空ける時間（カウンセリングなど。2026/10/21）
 var STEP_MIN = +SHOP.stepMin || 30;
 var DAYS_AHEAD = +SHOP.daysAhead || 0;   // 0 ＝ 上限なし（営業時間を入れた日はすべて受ける）
 var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
@@ -34,6 +35,9 @@ var DEMO = SHOP.demo === true;
 var LAST_DATE = '9999-12-31';
 var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
 function lastDate(today) { return DAYS_AHEAD > 0 ? addDays(today, DAYS_AHEAD) : LAST_DATE; }
+// 予約1回の長さ（分）＝ 枠をふさぐ長さ。メニューに slot があればそれ、なければ 前 ＋ 施術 ＋ 後（画面も同じ計算）
+function menuOf(name) { var m = null; (SHOP.menus || []).forEach(function (x) { if (x.name === name) m = x; }); return m; }
+function slotOf(m) { return +m.slot || (PRE_MIN + (+m.min) + BUFFER_MIN); }
 
 // 予約を受け付けられるか：デモは常に。本番は GAS の秘密の変数とお店のメールがそろっているとき
 function isOpen(env) {
@@ -142,6 +146,7 @@ function mailPreview(c, b, s) {
   L.push('このたびは ' + s.name + ' にご予約いただき、ありがとうございます。以下の内容でご予約を承りました。');
   L.push('■ 日時　　' + b.when);
   L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
+  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
   if (b.price) L.push('■ 料金　　' + b.price + (/円/.test(b.price) ? '（税込）' : ''));
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
   L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
@@ -156,13 +161,16 @@ async function handleDays(env) {
   var bl = (await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results;
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
-  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy });
+  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy });
 }
 
 async function handleBook(request, env) {
   if (!isOpen(env)) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
   var b = await readJson(request);
-  if (!b || !isDate(b.date) || !isTime(b.start) || !(b.minutes > 0 && b.minutes <= 240)) return json({ error: '入力が足りません' }, 400);
+  if (!b || !isDate(b.date) || !isTime(b.start)) return json({ error: '入力が足りません' }, 400);
+  var menu = menuOf(b.menu);
+  if (!menu) return json({ error: 'メニューを選んでください' }, 400);
+  var slot = slotOf(menu);   // 枠をふさぐ長さ（前の時間＋施術＋後の時間、か メニューの slot）
   // 名前・電話・メール（保存はしない。GAS へ渡すだけ）
   var name = String(b.name || '').trim().slice(0, 40), tel = String(b.tel || '').trim(), email = String(b.email || '').trim();
   if (!name) return json({ error: 'お名前を入れてください' }, 400);
@@ -172,23 +180,22 @@ async function handleBook(request, env) {
   var now = nowJST();
   if (b.date < now.date) return json({ error: '過ぎた日です' }, 400);
   if (DAYS_AHEAD > 0 && b.date > addDays(now.date, DAYS_AHEAD)) return json({ error: '先すぎる日です（' + DAYS_AHEAD + '日先まで）' }, 400);
-  var s = m2(b.start), e = s + Number(b.minutes), eb = e + BUFFER_MIN;
+  var s = m2(b.start), e = s + slot;   // 枠は来店から（カウンセリング込み）予約1回の長さ
   if (b.date === now.date && s < now.min + CUTOFF_MIN) return json({ error: '当日は ' + CUTOFF_MIN + ' 分前までのご予約です。LINE かお電話でお願いします' }, 400);
   var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
   if (!h) return json({ error: 'この日は営業していません' }, 400);
   if ((s - m2(h.s)) % STEP_MIN !== 0) return json({ error: '開始時間の形が違います' }, 400);
   if (s < m2(h.s) || e > m2(h.e)) return json({ error: '営業時間の外です' }, 400);
   var id = newId();
-  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(eb), kind: 'net', menu: String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
+  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString() });
   if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);
 
-  var menu = null;
-  (SHOP.menus || []).forEach(function (m) { if (m.name === b.menu) menu = m; });
-  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜' + t2(e), start: t2(s), end: t2(e), menu: String(b.menu || ''), min: Number(b.minutes), price: menu ? menu.price : '' };
+  // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
+  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menu.name, min: +menu.min, slot: slot, price: menu.price || '' };
   var shop = shopInfo();
   if (DEMO) {
     // デモ：メールは送らない。見本の文を返して画面に出す
-    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb), demo: true, mailPreview: mailPreview(cust, booking, shop) });
+    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, demo: true, mailPreview: mailPreview(cust, booking, shop) });
   }
   // 本番：枠を押さえたあとにメールを送る。送れなければ枠を取り消す
   var sent = await sendGas(env, { token: env.GAS_TOKEN, customer: cust, booking: booking, shop: shop });
@@ -196,7 +203,7 @@ async function handleBook(request, env) {
     await env.DB.prepare('DELETE FROM blocks WHERE id = ?1').bind(id).run();
     return json({ error: FAIL_MSG }, 502);
   }
-  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb) });
+  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot });
 }
 
 async function handleAdmin(request, env, path) {
@@ -233,8 +240,9 @@ async function handleAdmin(request, env, path) {
     var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
     if (!h) return json({ error: 'この日は休みです' }, 400);
     if (m2(b.s) < m2(h.s) || m2(b.e) > m2(h.e) + BUFFER_MIN) return json({ error: '営業時間の外です' }, 400);
+    var kind = b.kind === 'stop' ? 'stop' : 'man';   // stop ＝ 予約停止（名前・内容なし。お客さんの画面では空きに出ないだけ。2026/10/21）
     var id = newId();
-    var ok = await insertBlock(env.DB, { id: id, date: b.date, s: b.s, e: b.e, kind: 'man', menu: String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
+    var ok = await insertBlock(env.DB, { id: id, date: b.date, s: b.s, e: b.e, kind: kind, menu: kind === 'stop' ? '' : String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
     if (!ok) return json({ error: 'ほかの予約と重なっています' }, 409);
     return json({ ok: true, id: id });
   }

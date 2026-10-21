@@ -62,6 +62,7 @@ input[type=text],input[type=password],select{width:100%;font-size:16px;padding:1
 .ti{display:flex;justify-content:space-between;align-items:center;gap:8px;border-radius:10px;padding:9px 11px;margin-top:6px;font-size:14px}
 .ti.net{background:#fff4f4;border:1px solid #f0b9b9}
 .ti.man{background:#f3efec;border:1px solid #d9cec8}
+.ti.stop{background:#eceff1;border:1px solid #b0bec5;color:#455a64}  /* 予約停止（お店が止めた時間。2026/10/21） */
 .ti.free{background:var(--okbg);border:1px dashed var(--okbd);color:var(--ok)}
 .ti button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 8px;font-size:12px;white-space:nowrap}
 .blk{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
@@ -174,17 +175,21 @@ function reload(){
   }).catch(function(e){toast(e.message)});
 }
 
-/* 空いている開始時間（お客さんの画面と同じ計算） */
-function starts(k,min){
+/* 予約1回の長さ（枠をふさぐ分）：メニューの slot か、前の時間＋施術＋後の時間（お客さんの画面・サーバーと同じ計算。2026/10/21） */
+function PRE(){return +SHOP.preMin||0}
+function POST(){return +SHOP.bufferMin||0}
+function slotOf(m){return +m.slot||(PRE()+(+m.min)+POST())}
+/* 空いている開始時間（お客さんの画面と同じ計算。len＝予約1回の長さ） */
+function starts(k,len){
   var h=hours[k];if(!h)return [];
   var s=m2(h.s),e=m2(h.e),out=[],bl=blocks[k]||[];
-  for(var t=s;t+min<=e;t+=SHOP.stepMin){
-    var end=t+min+SHOP.bufferMin, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
+  for(var t=s;t+len<=e;t+=SHOP.stepMin){
+    var end=t+len, hit=bl.some(function(b){return t<m2(b.e)&&end>m2(b.s)});
     if(!hit)out.push(t2(t));
   }
   return out;
 }
-function shortest(){return Math.min.apply(null,SHOP.menus.map(function(m){return m.min}))}
+function shortest(){return Math.min.apply(null,SHOP.menus.map(function(m){return slotOf(m)}))}
 
 /* ---------- 画面 ---------- */
 function setMode(m){mode=m;document.getElementById("mPat").classList.toggle("on",m=="pat");document.getElementById("mDay").classList.toggle("on",m=="day");
@@ -234,19 +239,24 @@ function renderDay(){
   h+="<div class='tl'>";
   items.forEach(function(x){
     if(x.free)h+="<div class='ti free'><span>"+x.s+"〜"+x.e+"　空き</span></div>";
-    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>片づけ "+SHOP.bufferMin+"分込み</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
+    else if(x.kind=="stop")h+="<div class='ti stop'><span>"+x.s+"〜"+x.e+"　<b>予約停止</b><br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','停止を消しました（HP でまた予約できます）')\">停止を消す</button></div>";
+    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>来店から（前後の時間込み）</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
   });
   h+="</div>";
   var fs=firstFree()||hh.s;
   h+="<div class='sub'><b>LINE・電話で受けた予約を入れる</b>"+
     "<div class='blk'>始まり <select id='bS' onchange='syncEnd()'>"+opts10(fs)+"</select></div>"+
-    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（片づけ "+SHOP.bufferMin+"分も自動で）</div><div class='pat'>";
+    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（前"+PRE()+"分・後"+POST()+"分も自動で）</div><div class='pat'>";
   BPATS.forEach(function(p){h+="<button onclick='block("+(+p.min)+",\""+esc(p.name)+"\")'>"+esc(p.name)+"<small>"+p.min+"分</small></button>"});
   h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ 予約の型を作る・直す</button>")+"</div>";
   h+="<details class='more' style='margin-top:12px'><summary>終わりの時間を選んで入れる</summary>"+
     "<div class='blk'>〜 <select id='bE'>"+opts10(t2(m2(fs)+60))+"</select></div>"+
-    "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+SHOP.bufferMin+"分）も入れる</label>"+
+    "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+POST()+"分）も入れる</label>"+
     "<button class='btn main' style='margin-top:8px' onclick='blockFree()'>この時間で予約を入れる</button></details></div>";
+  // 予約停止：日にちと時間を選んで押すだけ（名前・内容なし。お客さんの画面ではその時間が空きに出ないだけ。2026/10/21）
+  h+="<div class='sub'><b>この時間は予約停止</b><div class='note'>ネット予約を受けない時間を入れます（休憩・外出・予約の前後をあけたいとき など）。</div>"+
+    "<div class='blk'><select id='sS'>"+opts10(fs)+"</select>〜<select id='sE'>"+opts10(t2(Math.min(m2(fs)+60,23*60)))+"</select></div>"+
+    "<button class='btn ghost' style='margin-top:8px;border-color:#b0bec5;color:#455a64' onclick='stopFree()'>この時間を予約停止にする</button></div>";
   b.innerHTML=h;
 }
 function firstFree(){var st=starts(sel,shortest());return st[0]}
@@ -255,15 +265,19 @@ function chH(w,v){var hh=hours[sel],n={s:hh.s,e:hh.e};n[w]=v;if(m2(n.s)>=m2(n.e)
 var t10=[];for(var mm=6*60;mm<=23*60;mm+=10)t10.push(t2(mm));
 function opts10(v){return t10.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
 function syncEnd(){var s=document.getElementById("bS").value,e=document.getElementById("bE");if(!e)return;if(m2(e.value)<=m2(s))e.value=t2(Math.min(m2(s)+60,23*60))}
-function addBlock(s,e,label,menu){var hh=hours[sel];
-  if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+SHOP.bufferMin){toast("営業時間の外です（営業時間を先に変えてください）");return}
-  api("block","POST",{date:sel,s:s,e:e,menu:menu||""}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
+function addBlock(s,e,label,menu,kind){var hh=hours[sel];
+  if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+POST()){toast("営業時間の外です（営業時間を先に変えてください）");return}
+  api("block","POST",{date:sel,s:s,e:e,menu:menu||"",kind:kind||"man"}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
+function stopFree(){var s=document.getElementById("sS").value,e=document.getElementById("sE").value;
+  if(m2(e)<=m2(s)){toast("終わりを始まりより後にしてください");return}
+  addBlock(s,e,s+"〜"+e+" を予約停止にしました","","stop")}
 function blockFree(){var s=document.getElementById("bS").value,e=document.getElementById("bE").value;
   if(m2(e)<=m2(s)){toast("終わりを始まりより後にしてください");return}
-  var buf=document.getElementById("bBuf").checked?SHOP.bufferMin:0;
+  var buf=document.getElementById("bBuf").checked?POST():0;
   addBlock(s,t2(m2(e)+buf),s+"〜"+e+" の予約を入れました","")}
-function block(mn,name){var s=document.getElementById("bS").value;addBlock(s,t2(m2(s)+mn+SHOP.bufferMin),s+" から "+(name?name+" ":"")+mn+"分の予約を入れました",name)}
-function unblock(id){api("block","DELETE",{id:id}).then(function(){toast("あけました（HP でまた予約できます）");return reload()}).catch(function(e){toast(e.message)})}
+function block(mn,name){var s=document.getElementById("bS").value;var mm=null;SHOP.menus.forEach(function(x){if(x.name==name)mm=x});var len=mm?slotOf(mm):PRE()+mn+POST();
+  addBlock(s,t2(m2(s)+len),s+" から "+(name?name+" ":"")+len+"分（前後の時間込み）の予約を入れました",name)}
+function unblock(id,msg){api("block","DELETE",{id:id}).then(function(){toast(msg||"あけました（HP でまた予約できます）");return reload()}).catch(function(e){toast(e.message)})}
 
 /* 予約の型（お店が変えられる） */
 var lens=[];for(var L=10;L<=240;L+=10)lens.push(L);
