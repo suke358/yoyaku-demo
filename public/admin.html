@@ -94,6 +94,7 @@ details.more summary{cursor:pointer;padding:4px 0}
     <b>お店の画面</b>
     <p class="note">パスワードを入れると、このスマホ（ブラウザ）に覚えさせます。</p>
     <label class="f">パスワード</label><input type="password" id="pw" autocomplete="current-password">
+    <p class="note" id="demoPw" style="display:none"></p>
     <div class="err" id="pwErr"></div>
     <button class="btn main" onclick="doLogin()">入る</button>
   </div>
@@ -300,6 +301,7 @@ fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(
   SHOP=parseJsonc(t);
   var R=document.documentElement.style;R.setProperty("--main",SHOP.color.main);R.setProperty("--sub",SHOP.color.sub);
   document.title=SHOP.shopName+" 予約管理";document.getElementById("ttl").textContent=SHOP.shopName+"　予約管理";
+  if(SHOP.demo===true&&SHOP.demoPassword){var dp=document.getElementById("demoPw");dp.textContent="デモ用のパスワード："+SHOP.demoPassword;dp.style.display="block"}   // デモだけ（本番の shop.jsonc には demoPassword を書かない）
   for(var m=6*60;m<=23*60;m+=SHOP.stepMin)tOpts.push(t2(m));
   if(getPw()){api("login","POST",{}).then(function(){start()}).catch(function(e){showLogin(e.message=="パスワードが違います"?"前のパスワードが使えなくなりました。もう一度入れてください":e.message)})}
   else showLogin("");

@@ -1,8 +1,14 @@
-// 予約カレンダー（Lift-Off の部品）の API　2026/10/20（10/20 夜：お店ごとの値を public/shop.jsonc に。日本時間で計算）
-// 持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存しない（Formspree へ画面から直接送る）
+// 予約カレンダー（Lift-Off の部品）の API　2026/10/20（10/21：お店の Gmail（GAS）から確認メール＋知らせ・先の上限なし・デモの切りかえ）
+// 持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存しない（枠を押さえたあと GAS へ渡すだけ）
+// お店ごとの値は public/shop.jsonc の1つ。ここにお店の名前や値は書かない
 //
-// GET  /api/days                      今日以降（daysAhead 日先まで）の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
-// POST /api/book {date,start,minutes} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる（片づけ bufferMin を足す）。重なったら 409
+// 知らせ：/api/book が名前・電話・メールも受け取り、D1 で枠を押さえたあと GAS（お店の Gmail から送る係。gas/Code.gs）へ POST。
+//   GAS が {ok:true} を返さなければ枠を取り消して 502（枠だけ埋まってメールが来ない、を起こさない）
+//   GAS の URL と合言葉は秘密の変数 GAS_URL・GAS_TOKEN（本番 wrangler secret put／手元 .dev.vars）
+// デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
+//
+// GET  /api/days                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
+// POST /api/book {date,start,minutes,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる（片づけ bufferMin を足す）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu つき）・settings
@@ -15,15 +21,25 @@
 
 import shopText from '../public/shop.jsonc';
 
-// shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す）
+// shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す。注釈に引用符は書けない）
 function parseJsonc(t) {
   return JSON.parse(t.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 }
 var SHOP = parseJsonc(shopText);
 var BUFFER_MIN = +SHOP.bufferMin || 20;
 var STEP_MIN = +SHOP.stepMin || 30;
-var DAYS_AHEAD = +SHOP.daysAhead || 60;
+var DAYS_AHEAD = +SHOP.daysAhead || 0;   // 0 ＝ 上限なし（営業時間を入れた日はすべて受ける）
 var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
+var DEMO = SHOP.demo === true;
+var LAST_DATE = '9999-12-31';
+var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
+function lastDate(today) { return DAYS_AHEAD > 0 ? addDays(today, DAYS_AHEAD) : LAST_DATE; }
+
+// 予約を受け付けられるか：デモは常に。本番は GAS の秘密の変数とお店のメールがそろっているとき
+function isOpen(env) {
+  if (DEMO) return true;
+  return !!(env.GAS_URL && env.GAS_TOKEN && SHOP.mail);
+}
 
 // 表を最初のリクエストで作る（Workers Builds では migrations が自動で走らないため。schema.sql と同じ内容）
 var SCHEMA = [
@@ -57,6 +73,11 @@ function nowJST() {
 function addDays(dateKey, n) {
   var d = new Date(dateKey + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
 }
+var DOW = ['日', '月', '火', '水', '木', '金', '土'];
+function jpDate(k) {
+  var d = new Date(k + 'T00:00:00Z');
+  return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日（' + DOW[d.getUTCDay()] + '）';
+}
 
 async function readJson(request) {
   try { return await request.json(); } catch (e) { return null; }
@@ -72,22 +93,69 @@ async function insertBlock(db, b) {
   return r.meta && r.meta.changes > 0;
 }
 
+// GAS へ渡す中身（お店の情報は shop.jsonc から。GAS にお店の値は書かない）
+function shopInfo() {
+  return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', cancelPolicy: SHOP.cancelPolicy || '' };
+}
+
+// GAS（お店の Gmail から送る係）へ送る。返事が {ok:true} のときだけ true。25 秒で打ち切り
+async function sendGas(env, payload) {
+  var ctl = new AbortController();
+  var tm = setTimeout(function () { ctl.abort(); }, 25000);
+  try {
+    var r = await fetch(env.GAS_URL, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload), redirect: 'follow', signal: ctl.signal
+    });
+    var t = await r.text(), j = null;
+    try { j = JSON.parse(t); } catch (e) { }
+    return !!(r.ok && j && j.ok === true);
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(tm);
+  }
+}
+
+// デモ用：確認メールの見本の文（本物の文は gas/Code.gs の customerBody。そちらを直したらここも合わせる）
+function mailPreview(c, b, s) {
+  var L = [];
+  L.push('件名：【' + s.shortName + '】ご予約を承りました');
+  L.push('');
+  L.push(c.name + ' 様');
+  L.push('このたびは ' + s.name + ' にご予約いただき、ありがとうございます。以下の内容でご予約を承りました。');
+  L.push('■ 日時　　' + b.when);
+  L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
+  if (b.price) L.push('■ 料金　　' + b.price + (/円/.test(b.price) ? '（税込）' : ''));
+  L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
+  L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
+  if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));
+  L.push('当日お会いできるのを楽しみにしております。');
+  return L.join('\n');
+}
+
 async function handleDays(env) {
-  var now = nowJST(), last = addDays(now.date, DAYS_AHEAD);
+  var now = nowJST(), last = lastDate(now.date);
   var hours = (await env.DB.prepare('SELECT date, s, e FROM hours WHERE date >= ?1 AND date <= ?2 ORDER BY date').bind(now.date, last).all()).results;
   var bl = (await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results;
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
-  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: !!SHOP.formspree, hours: hours, busy: busy });
+  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy });
 }
 
 async function handleBook(request, env) {
-  if (!SHOP.formspree) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
+  if (!isOpen(env)) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
   var b = await readJson(request);
   if (!b || !isDate(b.date) || !isTime(b.start) || !(b.minutes > 0 && b.minutes <= 240)) return json({ error: '入力が足りません' }, 400);
+  // 名前・電話・メール（保存はしない。GAS へ渡すだけ）
+  var name = String(b.name || '').trim().slice(0, 40), tel = String(b.tel || '').trim(), email = String(b.email || '').trim();
+  if (!name) return json({ error: 'お名前を入れてください' }, 400);
+  if (!/^[0-9\-]{10,13}$/.test(tel)) return json({ error: '電話番号を数字で入れてください' }, 400);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 100) return json({ error: 'メールアドレスの形を確かめてください' }, 400);
+  var cust = { name: name, tel: tel, email: email };
   var now = nowJST();
   if (b.date < now.date) return json({ error: '過ぎた日です' }, 400);
-  if (b.date > addDays(now.date, DAYS_AHEAD)) return json({ error: '先すぎる日です（' + DAYS_AHEAD + '日先まで）' }, 400);
+  if (DAYS_AHEAD > 0 && b.date > addDays(now.date, DAYS_AHEAD)) return json({ error: '先すぎる日です（' + DAYS_AHEAD + '日先まで）' }, 400);
   var s = m2(b.start), e = s + Number(b.minutes), eb = e + BUFFER_MIN;
   if (b.date === now.date && s < now.min + CUTOFF_MIN) return json({ error: '当日は ' + CUTOFF_MIN + ' 分前までのご予約です。LINE かお電話でお願いします' }, 400);
   var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
@@ -97,6 +165,21 @@ async function handleBook(request, env) {
   var id = newId();
   var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(eb), kind: 'net', menu: String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
   if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);
+
+  var menu = null;
+  (SHOP.menus || []).forEach(function (m) { if (m.name === b.menu) menu = m; });
+  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜' + t2(e), start: t2(s), end: t2(e), menu: String(b.menu || ''), min: Number(b.minutes), price: menu ? menu.price : '' };
+  var shop = shopInfo();
+  if (DEMO) {
+    // デモ：メールは送らない。見本の文を返して画面に出す
+    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb), demo: true, mailPreview: mailPreview(cust, booking, shop) });
+  }
+  // 本番：枠を押さえたあとにメールを送る。送れなければ枠を取り消す
+  var sent = await sendGas(env, { token: env.GAS_TOKEN, customer: cust, booking: booking, shop: shop });
+  if (!sent) {
+    await env.DB.prepare('DELETE FROM blocks WHERE id = ?1').bind(id).run();
+    return json({ error: FAIL_MSG }, 502);
+  }
   return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), busyUntil: t2(eb) });
 }
 
