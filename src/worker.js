@@ -93,6 +93,22 @@ async function insertBlock(db, b) {
   return r.meta && r.meta.changes > 0;
 }
 
+// デモだけ（demo:true）：お店の画面で何も入れていなくても、今日から 14 日は毎日 10:00〜18:00 が空いている形にする。
+// 試しの予約は 24 時間たつと消す（枠が埋まりっぱなしにならないように）。過ぎた日の営業時間も消す。/api/… のたびに動く（Cron なし）
+var DEMO_DAYS = 14, DEMO_S = '10:00', DEMO_E = '18:00';
+async function demoPrepare(db) {
+  var now = nowJST();
+  var old = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  var q = [
+    db.prepare('DELETE FROM blocks WHERE created_at < ?1 OR date < ?2').bind(old, now.date),
+    db.prepare('DELETE FROM hours WHERE date < ?1').bind(now.date)
+  ];
+  for (var i = 0; i < DEMO_DAYS; i++) {
+    q.push(db.prepare('INSERT INTO hours (date, s, e) VALUES (?1, ?2, ?3) ON CONFLICT(date) DO NOTHING').bind(addDays(now.date, i), DEMO_S, DEMO_E));
+  }
+  await db.batch(q);
+}
+
 // GAS へ渡す中身（お店の情報は shop.jsonc から。GAS にお店の値は書かない）
 function shopInfo() {
   return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', cancelPolicy: SHOP.cancelPolicy || '' };
@@ -255,6 +271,7 @@ export default {
     if (p.indexOf('/api/') !== 0) return env.ASSETS.fetch(request);
     try {
       await ensureTables(env.DB);
+      if (DEMO) await demoPrepare(env.DB);
       if (p === '/api/days' && request.method === 'GET') return await handleDays(env);
       if (p === '/api/book' && request.method === 'POST') return await handleBook(request, env);
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
