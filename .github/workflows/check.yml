@@ -1,0 +1,17 @@
+# push と pull request のたびに、型チェック（JSDoc＋checkJs）とテスト（Workers の実行環境で空き計算・二重予約）を走らせる（2026/10/25）
+name: check
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

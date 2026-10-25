@@ -1,0 +1,27 @@
+{
+  "name": "yoyaku-demo",
+  "version": "1.0.0",
+  "description": "予約カレンダー（Lift-Off の部品）",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check": "npm run typecheck && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suke358/yoyaku-demo.git"
+  },
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/suke358/yoyaku-demo/issues"
+  },
+  "homepage": "https://github.com/suke358/yoyaku-demo#readme",
+  "private": "true",
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261025.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.152.0"
+  }
+}

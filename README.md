@@ -27,6 +27,13 @@
 10. **試す**：お客さんの画面で予約 → お客さんとお店にメール → お店の画面で見える → キャンセルで空く。お店のスマホで `/admin` をホーム画面に追加
 11. **独自ドメイン（チャット）**：Cloudflare の Worker → Settings → Domains & Routes → Custom Domain `yoyaku.〇〇.com`。お店の HP の「ネットで予約する」の行き先をそこに
 
+## 開発の作法（2026/10/25）
+- **自動テスト**：`npm test`（vitest ＋ @cloudflare/vitest-plugin）。テストは本番と同じ Workers の実行環境（workerd）と D1 の中で動く。test/api.test.js が守るもの：営業日／前の時間・施術・後の時間の枠の長さ／メニューの slot／長いメニューは開始時間が絞られる／予約停止の時間は選べない／当日は締切前まで／きざみ／二重予約（順でも同時でも 2 件目は 409）／/api/days に予約の中身を出さない／入力の確かめ／お店の画面の合言葉。お店の値（前後の分・きざみ・締切・メニュー）は shop.jsonc から読む
+- **型チェック**：`npm run typecheck`（tsc --noEmit・checkJs・strict）。TypeScript には書き直さず、src/worker.js の JSDoc で型を書く。新しい関数には `@param`・`@returns` を付ける
+- **push のたびの自動チェック**：GitHub Actions（.github/workflows/check.yml）が push と pull request で型チェックとテストを走らせる。赤いままの push は本番に出さない
+- 道具は `npm ci` で入る（node_modules は git の外。Node 24）。`npm run check` で両方
+- 動きを変える直しをしたら、先にテストを直して「落ちる」のを見てから中身を直す（二重予約を止める SQL をわざと壊すと 5 件落ちることを 10/25 に確認）
+
 ## 決まり
 - お客さんの情報（名前・電話・メール）はサーバーに残さない。D1 にあるのは日にち・時間・埋まっている時間だけ
 - 同じ枠を同時に押しても、2つ目は 409（「たった今ほかの方の予約が入りました」）。確かめ方：`curl` で同じ枠を2本並行して POST → 200 と 409 が1つずつ

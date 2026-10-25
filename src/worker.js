@@ -21,25 +21,40 @@
 
 import shopText from '../public/shop.jsonc';
 
+// ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
+/** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
+/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean }} Shop */
+/** @typedef {{ DB: D1Database, ASSETS: Fetcher, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
+/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string }} Block */
+/** @typedef {{ name: string, tel: string, email: string }} Customer */
+/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string }} Booking */
+/** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
+
 // shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す。注釈に引用符は書けない）
+/** @param {string} t @returns {any} */
 function parseJsonc(t) {
   return JSON.parse(t.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 }
+/** @type {Shop} */
 var SHOP = parseJsonc(shopText);
-var BUFFER_MIN = +SHOP.bufferMin || 0;   // 施術のあとに空ける時間（片づけ）
-var PRE_MIN = +SHOP.preMin || 0;        // 施術の前に空ける時間（カウンセリングなど。2026/10/21）
-var STEP_MIN = +SHOP.stepMin || 30;
-var DAYS_AHEAD = +SHOP.daysAhead || 0;   // 0 ＝ 上限なし（営業時間を入れた日はすべて受ける）
+var BUFFER_MIN = +(/** @type {number} */ (SHOP.bufferMin)) || 0;   // 施術のあとに空ける時間（片づけ）
+var PRE_MIN = +(/** @type {number} */ (SHOP.preMin)) || 0;        // 施術の前に空ける時間（カウンセリングなど。2026/10/21）
+var STEP_MIN = +(/** @type {number} */ (SHOP.stepMin)) || 30;
+var DAYS_AHEAD = +(/** @type {number} */ (SHOP.daysAhead)) || 0;   // 0 ＝ 上限なし（営業時間を入れた日はすべて受ける）
 var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
 var DEMO = SHOP.demo === true;
 var LAST_DATE = '9999-12-31';
 var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
+/** @param {string} today @returns {string} */
 function lastDate(today) { return DAYS_AHEAD > 0 ? addDays(today, DAYS_AHEAD) : LAST_DATE; }
 // 予約1回の長さ（分）＝ 枠をふさぐ長さ。メニューに slot があればそれ、なければ 前 ＋ 施術 ＋ 後（画面も同じ計算）
-function menuOf(name) { var m = null; (SHOP.menus || []).forEach(function (x) { if (x.name === name) m = x; }); return m; }
-function slotOf(m) { return +m.slot || (PRE_MIN + (+m.min) + BUFFER_MIN); }
+/** @param {string} name @returns {ShopMenu|null} */
+function menuOf(name) { /** @type {ShopMenu|null} */ var m = null; (SHOP.menus || []).forEach(function (x) { if (x.name === name) m = x; }); return m; }
+/** @param {ShopMenu} m @returns {number} */
+function slotOf(m) { return +(/** @type {number} */ (m.slot)) || (PRE_MIN + (+m.min) + BUFFER_MIN); }
 
 // 予約を受け付けられるか：デモは常に。本番は GAS の秘密の変数とお店のメールがそろっているとき
+/** @param {Env} env @returns {boolean} */
 function isOpen(env) {
   if (DEMO) return true;
   return !!(env.GAS_URL && env.GAS_TOKEN && SHOP.mail);
@@ -52,42 +67,55 @@ var SCHEMA = [
   'CREATE INDEX IF NOT EXISTS blocks_date ON blocks(date)',
   'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
 ];
+/** @type {Promise<unknown>|null} */
 var ready = null;
+/** @param {D1Database} db */
 function ensureTables(db) {
   if (!ready) ready = db.batch(SCHEMA.map(function (q) { return db.prepare(q); })).catch(function (e) { ready = null; throw e; });
   return ready;
 }
 
+/** @param {unknown} body @param {number} [status] @param {Record<string,string>} [extra] @returns {Response} */
 function json(body, status, extra) {
+  /** @type {Record<string,string>} */
   var h = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
   if (extra) for (var k in extra) h[k] = extra[k];
   return new Response(JSON.stringify(body), { status: status || 200, headers: h });
 }
+/** @param {string} t @returns {number} */
 function m2(t) { var a = String(t).split(':'); return (+a[0]) * 60 + (+a[1]); }
+/** @param {number} m @returns {string} */
 function t2(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
+/** @param {unknown} s @returns {boolean} */
 function isDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s)); }
-function isTime(s) { return /^\d{2}:\d{2}$/.test(String(s)) && m2(s) >= 0 && m2(s) <= 24 * 60; }
+/** @param {unknown} s @returns {boolean} */
+function isTime(s) { return /^\d{2}:\d{2}$/.test(String(s)) && m2(/** @type {string} */ (s)) >= 0 && m2(/** @type {string} */ (s)) <= 24 * 60; }
 function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
 // 日本時間（Workers は UTC で動くので、+9 時間して日付と時刻を出す）
+/** @returns {{ date: string, min: number }} */
 function nowJST() {
   var d = new Date(Date.now() + 9 * 3600 * 1000);
   return { date: d.toISOString().slice(0, 10), min: d.getUTCHours() * 60 + d.getUTCMinutes() };
 }
+/** @param {string} dateKey @param {number} n @returns {string} */
 function addDays(dateKey, n) {
   var d = new Date(dateKey + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
 }
 var DOW = ['日', '月', '火', '水', '木', '金', '土'];
+/** @param {string} k @returns {string} */
 function jpDate(k) {
   var d = new Date(k + 'T00:00:00Z');
   return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日（' + DOW[d.getUTCDay()] + '）';
 }
 
+/** @param {Request} request @returns {Promise<any>} */
 async function readJson(request) {
   try { return await request.json(); } catch (e) { return null; }
 }
 
 // 重ならないときだけ入れる（1つの文で確かめて入れるので、同時に2人が押しても2つ目は入らない）
+/** @param {D1Database} db @param {Block} b @returns {Promise<boolean>} */
 async function insertBlock(db, b) {
   var r = await db.prepare(
     'INSERT INTO blocks (id, date, s, e, kind, menu, created_at) ' +
@@ -100,6 +128,7 @@ async function insertBlock(db, b) {
 // デモだけ（demo:true）：お店の画面で何も入れていなくても、今日から 14 日は毎日 10:00〜18:00 が空いている形にする。
 // 試しの予約は 24 時間たつと消す（枠が埋まりっぱなしにならないように）。過ぎた日の営業時間も消す。/api/… のたびに動く（Cron なし）
 var DEMO_DAYS = 14, DEMO_S = '10:00', DEMO_E = '18:00';
+/** @param {D1Database} db */
 async function demoPrepare(db) {
   var now = nowJST();
   var old = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -114,16 +143,18 @@ async function demoPrepare(db) {
 }
 
 // GAS へ渡す中身（お店の情報は shop.jsonc から。GAS にお店の値は書かない）
+/** @returns {ShopInfo} */
 function shopInfo() {
   return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', mapUrl: SHOP.mapUrl || '', cancelPolicy: SHOP.cancelPolicy || '' };
 }
 
 // GAS（お店の Gmail から送る係）へ送る。返事が {ok:true} のときだけ true。25 秒で打ち切り
+/** @param {Env} env @param {unknown} payload @returns {Promise<boolean>} */
 async function sendGas(env, payload) {
   var ctl = new AbortController();
   var tm = setTimeout(function () { ctl.abort(); }, 25000);
   try {
-    var r = await fetch(env.GAS_URL, {
+    var r = await fetch(/** @type {string} */ (env.GAS_URL), {   // isOpen() で GAS_URL があるときだけここに来る
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload), redirect: 'follow', signal: ctl.signal
     });
@@ -138,6 +169,7 @@ async function sendGas(env, payload) {
 }
 
 // デモ用：確認メールの見本の文（本物の文は gas/Code.gs の customerBody。そちらを直したらここも合わせる）
+/** @param {Customer} c @param {Booking} b @param {ShopInfo} s @returns {string} */
 function mailPreview(c, b, s) {
   var L = [];
   L.push('件名：【' + s.shortName + '】ご予約を承りました');
@@ -156,15 +188,18 @@ function mailPreview(c, b, s) {
   return L.join('\n');
 }
 
+/** @param {Env} env */
 async function handleDays(env) {
   var now = nowJST(), last = lastDate(now.date);
   var hours = (await env.DB.prepare('SELECT date, s, e FROM hours WHERE date >= ?1 AND date <= ?2 ORDER BY date').bind(now.date, last).all()).results;
-  var bl = (await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results;
+  var bl = /** @type {{ date: string, s: string, e: string }[]} */ ((await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results);
+  /** @type {Record<string, { s: string, e: string, kind: string }[]>} */
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
   return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy });
 }
 
+/** @param {Request} request @param {Env} env */
 async function handleBook(request, env) {
   if (!isOpen(env)) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
   var b = await readJson(request);
@@ -183,7 +218,7 @@ async function handleBook(request, env) {
   if (DAYS_AHEAD > 0 && b.date > addDays(now.date, DAYS_AHEAD)) return json({ error: '先すぎる日です（' + DAYS_AHEAD + '日先まで）' }, 400);
   var s = m2(b.start), e = s + slot;   // 枠は来店から（カウンセリング込み）予約1回の長さ
   if (b.date === now.date && s < now.min + CUTOFF_MIN) return json({ error: '当日は ' + CUTOFF_MIN + ' 分前までのご予約です。LINE かお電話でお願いします' }, 400);
-  var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
+  var h = /** @type {{ s: string, e: string }|null} */ (await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first());
   if (!h) return json({ error: 'この日は営業していません' }, 400);
   if ((s - m2(h.s)) % STEP_MIN !== 0) return json({ error: '開始時間の形が違います' }, 400);
   if (s < m2(h.s) || e > m2(h.e)) return json({ error: '営業時間の外です' }, 400);
@@ -207,6 +242,7 @@ async function handleBook(request, env) {
   return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot });
 }
 
+/** @param {Request} request @param {Env} env @param {string} path */
 async function handleAdmin(request, env, path) {
   if (!env.ADMIN_PASSWORD) return json({ error: 'ADMIN_PASSWORD が設定されていません（wrangler secret put ADMIN_PASSWORD）' }, 500);
   var pw = request.headers.get('X-Admin-Password') || '';
@@ -216,7 +252,9 @@ async function handleAdmin(request, env, path) {
   if (path === 'all' && m === 'GET') {
     var hours = (await env.DB.prepare('SELECT date, s, e FROM hours ORDER BY date').all()).results;
     var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu FROM blocks ORDER BY date, s').all()).results;
-    var st = (await env.DB.prepare('SELECT key, value FROM settings').all()).results, settings = {};
+    var st = /** @type {{ key: string, value: string }[]} */ ((await env.DB.prepare('SELECT key, value FROM settings').all()).results);
+    /** @type {Record<string, unknown>} */
+    var settings = {};
     st.forEach(function (r) { try { settings[r.key] = JSON.parse(r.value); } catch (e) { } });
     return json({ today: nowJST().date, hours: hours, blocks: blocks, settings: settings, bufferMin: BUFFER_MIN, stepMin: STEP_MIN });
   }
@@ -228,7 +266,7 @@ async function handleAdmin(request, env, path) {
   }
   if (path === 'hours' && m === 'DELETE') {
     if (!isDate(b.date)) return json({ error: '日にちを確かめてください' }, 400);
-    var net = await env.DB.prepare("SELECT COUNT(*) AS n FROM blocks WHERE date = ?1 AND kind = 'net'").bind(b.date).first();
+    var net = /** @type {{ n: number }|null} */ (await env.DB.prepare("SELECT COUNT(*) AS n FROM blocks WHERE date = ?1 AND kind = 'net'").bind(b.date).first());
     if (net && net.n > 0) return json({ error: 'ネット予約がある日は休みにできません' }, 409);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM blocks WHERE date = ?1').bind(b.date),
@@ -238,7 +276,7 @@ async function handleAdmin(request, env, path) {
   }
   if (path === 'block' && m === 'POST') {
     if (!isDate(b.date) || !isTime(b.s) || !isTime(b.e) || m2(b.s) >= m2(b.e)) return json({ error: '時間を確かめてください' }, 400);
-    var h = await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first();
+    var h = /** @type {{ s: string, e: string }|null} */ (await env.DB.prepare('SELECT s, e FROM hours WHERE date = ?1').bind(b.date).first());
     if (!h) return json({ error: 'この日は休みです' }, 400);
     if (m2(b.s) < m2(h.s) || m2(b.e) > m2(h.e) + BUFFER_MIN) return json({ error: '営業時間の外です' }, 400);
     var kind = b.kind === 'stop' ? 'stop' : 'man';   // stop ＝ 予約停止（名前・内容なし。お客さんの画面では空きに出ないだけ。2026/10/21）
@@ -272,6 +310,7 @@ function manifest() {
 }
 
 export default {
+  /** @param {Request} request @param {Env} env */
   async fetch(request, env) {
     var url = new URL(request.url);
     var p = url.pathname;
@@ -285,7 +324,7 @@ export default {
       if (p === '/api/book' && request.method === 'POST') return await handleBook(request, env);
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       return json({ error: 'サーバーでエラー：' + String(e && e.message || e) }, 500);
     }
   }
