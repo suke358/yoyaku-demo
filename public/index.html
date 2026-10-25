@@ -64,10 +64,12 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
 .foot{font-size:11px;color:var(--mute);text-align:center;margin-top:20px}
 .foot a{color:var(--mute)}
-.back{display:none;font-size:12px;color:var(--mute);text-decoration:none}
-.back.on{display:block}
-.top .back{text-align:center;padding:0 16px 8px}
-.back.bottom{text-align:center;margin-top:16px}
+/* もどるリンク：押せるボタンに見えるように（枠・15px・高さ44px以上・本文の色。2026/10/25） */
+.back{display:none;font-size:15px;line-height:1.3;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:999px;background:#fff;padding:12px 18px;min-height:44px;text-align:center}
+.back.on{display:inline-block}
+.topback{text-align:center;padding:0 16px 10px}
+.bottomback{text-align:center;margin-top:16px}
+.thanks .h{font-size:20px;font-weight:bold;margin:4px 0 8px}
 /* 日付の横並び（横にスクロール。動きなし。flex の gap は使わず margin） */
 .days{display:flex;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:4px 0 8px;margin:8px -4px 0}
 .dbtn{flex:none;width:56px;min-height:56px;margin:0 4px;border:1px solid var(--line);background:#fff;border-radius:12px;padding:6px 0;text-align:center;line-height:1.25}
@@ -83,7 +85,7 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 </style>
 </head>
 <body>
-<div class="top"><div class="ttl" id="ttl">ご予約</div><a class="back" id="backTop" href="#"></a></div>
+<div class="top"><div class="ttl" id="ttl">ご予約</div><div class="topback"><a class="back" id="backTop" href="#"></a></div></div>
 
 <main>
   <div class="card">
@@ -104,7 +106,7 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
       <a class="telbtn" id="telBtn" href="#" style="display:none"></a>
     </div>
   </div>
-  <a class="back bottom" id="backBottom" href="#"></a>
+  <div class="bottomback"><a class="back" id="backBottom" href="#"></a></div>
   <div class="foot" id="foot">予約カレンダー（Lift-Off）</div>
 </main>
 
@@ -225,7 +227,7 @@ function send(){
     if(res.status==502){e.innerHTML="<div class='warn'>"+esc((res.body&&res.body.error)||"ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください")+"</div>";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
     if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
     var when=jp(c.k)+" "+c.t+"〜";
-    var h="<div class='thanks'><div class='big'>✓</div><b>ご予約を受け付けました</b><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p>";
+    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を受け付けました</div><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p>";
     // 場所（住所・駐車場・地図・電話）。値があるものだけ（shop.jsonc）
     var pl=[];
     if(SHOP.address)pl.push(esc(SHOP.address));
@@ -233,6 +235,10 @@ function send(){
     if(SHOP.mapUrl)pl.push("<a href='"+esc(SHOP.mapUrl)+"' target='_blank' rel='noopener'>Googleマップで道順を見る</a>");
     if(SHOP.tel)pl.push("お電話　<a href='tel:"+esc(String(SHOP.tel).replace(/[^0-9+]/g,""))+"'>"+esc(SHOP.tel)+"</a>");
     if(pl.length)h+="<div class='policy' style='text-align:left'><b>■ 場所</b><br>"+pl.join("<br>")+"</div>";
+    // 確認メールが届かないときの案内（デモはメールを送っていないので出さない）と、HP にもどるボタン（shop.jsonc に backUrl・backText があるときだけ）
+    var w2=[];if(SHOP.lineUrl)w2.push("LINE");if(SHOP.tel)w2.push("お電話");
+    if(!(res.body&&res.body.demo))h+="<p class='note' style='margin-top:10px'>確認メールが届かないときは、迷惑メールをご確認のうえ、"+(w2.length?w2.join("か")+"で":"お店に")+"ご連絡ください。</p>";
+    if(SHOP.backUrl&&SHOP.backText)h+="<div class='bottomback' style='margin-top:12px'><a class='back on' href='"+esc(SHOP.backUrl)+"'>"+esc(SHOP.backText)+"</a></div>";
     if(res.body&&res.body.demo){
       // デモ：メールは送っていない。本番で届くメールの見本を出す
       h+="<div class='warn'>これはデモです。メールは送っていません。<br>本番では、次の確認メールがお客さまに、予約の知らせがお店に届きます。</div>"+
