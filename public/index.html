@@ -64,6 +64,17 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
 .foot{font-size:11px;color:var(--mute);text-align:center;margin-top:20px}
 .foot a{color:var(--mute)}
+/* ご予約の流れ（案内の枠。ボタンに見えない作り・押せない。2026/10/25） */
+.guide{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:10px 12px 12px;margin:0 0 12px}
+.guide .gt{font-size:13px;font-weight:bold;margin:0 0 8px}
+.flow{display:flex;margin:0 -2px}
+.flow .st{flex:1;position:relative;text-align:center;font-size:11px;line-height:1.35;color:var(--ink);padding:0 2px}
+.flow .st::before{content:"";position:absolute;top:5px;left:-50%;right:50%;height:1.5px;background:var(--main);opacity:.45}
+.flow .st:first-child::before{display:none}
+.flow .dot{display:block;width:11px;height:11px;border:1.5px solid var(--main);border-radius:50%;background:#fff;margin:0 auto 5px;position:relative;z-index:1}
+.flow .st.last .dot{background:var(--main)}
+.flow .st.last{font-weight:bold}
+.linetext{color:#06c755;text-decoration:underline}
 /* もどるリンク：押せるボタンに見えるように（枠・15px・高さ44px以上・本文の色。2026/10/25） */
 .back{display:none;font-size:15px;line-height:1.3;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:999px;background:#fff;padding:12px 18px;min-height:44px;text-align:center}
 .back.on{display:inline-block}
@@ -90,19 +101,20 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 <main>
   <div class="card">
     <h2>ご予約</h2><div class="en">RESERVATION</div>
+    <div class="guide" aria-label="ご予約の流れ"><p class="gt">ご予約の流れ</p><div class="flow"><div class='st'><span class='dot'></span>メニュー</div><div class='st'><span class='dot'></span>日時</div><div class='st'><span class='dot'></span>お名前などの<wbr>入力</div><div class='st'><span class='dot'></span>送信</div><div class='st last'><span class='dot'></span>予約完了</div></div><p class="note" style="margin:8px 0 0">このページだけでご予約が完了します。</p></div>
     <p class="note" id="topNote" style="display:none;margin:0 0 10px"></p>
     <b>① メニューを選ぶ</b>
     <p class="note" id="taxNote" style="display:none;margin:6px 0 0"></p>
     <div class="menus" id="menuList" style="margin-top:8px"></div>
-    <div id="otherMenus" style="display:none;margin-top:12px"><p class="note" id="otherMenusNote" style="margin:0 0 6px"></p><a class="linebtn" id="otherLine" href="#" target="_blank" rel="noopener" style="margin-top:0">LINE で相談する</a></div>
+    <div id="otherMenus" style="display:none;margin-top:12px"><p class="note" id="otherMenusNote" style="margin:0"></p></div>
   </div>
   <div class="card">
     <b>② 日にちと時間を選ぶ</b>
     <div id="custList"><div class="empty">読みこみ中…</div></div>
     <p class="note" id="custNote" style="margin-top:8px">※完全予約制です。表示のない日・時間は、LINE・お電話でご相談ください。</p>
     <div class="other" id="other" style="display:none">
-      <div class="t">LINE・お電話でもご予約いただけます</div>
-      <a class="linebtn" id="lineBtn" href="#" target="_blank" rel="noopener" style="display:none">LINE で予約・相談する</a>
+      <div class="t">ご相談・ご不明な点は</div>
+      <a class="linebtn" id="lineBtn" href="#" target="_blank" rel="noopener" style="display:none">LINE で相談する</a>
       <a class="telbtn" id="telBtn" href="#" style="display:none"></a>
     </div>
   </div>
@@ -156,7 +168,11 @@ function applyShop(){
   if(SHOP.topNote){var tn=document.getElementById("topNote");tn.textContent=SHOP.topNote;tn.style.display="block"}
   if(SHOP.taxNote){var tx=document.getElementById("taxNote");tx.textContent=SHOP.taxNote;tx.style.display="block"}
   if(SHOP.backUrl&&SHOP.backText){["backTop","backBottom"].forEach(function(id){var a=document.getElementById(id);a.href=SHOP.backUrl;a.textContent=SHOP.backText;a.className+=" on"})}
-  if(SHOP.otherMenusNote){document.getElementById("otherMenusNote").textContent=SHOP.otherMenusNote;var ol=document.getElementById("otherLine");if(SHOP.lineUrl)ol.href=SHOP.lineUrl;else ol.style.display="none";document.getElementById("otherMenus").style.display="block"}
+  if(SHOP.otherMenusNote){
+    // 文の中の「公式LINE」だけ文字リンクに（lineUrl があるとき。なければ文のまま）。緑のボタンは出さない（2026/10/25）
+    var on=esc(SHOP.otherMenusNote);
+    if(SHOP.lineUrl)on=on.replace("公式LINE","<a class='linetext' href='"+esc(SHOP.lineUrl)+"' target='_blank' rel='noopener'>公式LINE</a>");
+    document.getElementById("otherMenusNote").innerHTML=on;document.getElementById("otherMenus").style.display="block"}
   var w=[];if(SHOP.lineUrl)w.push("LINE");if(SHOP.tel)w.push("お電話");
   document.getElementById("custNote").textContent="※完全予約制です。表示のない日・時間は、"+(w.length?w.join("・")+"で":"お店に")+"ご相談ください。";
 }
