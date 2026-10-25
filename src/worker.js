@@ -115,7 +115,7 @@ async function demoPrepare(db) {
 
 // GAS へ渡す中身（お店の情報は shop.jsonc から。GAS にお店の値は書かない）
 function shopInfo() {
-  return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', cancelPolicy: SHOP.cancelPolicy || '' };
+  return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', mapUrl: SHOP.mapUrl || '', cancelPolicy: SHOP.cancelPolicy || '' };
 }
 
 // GAS（お店の Gmail から送る係）へ送る。返事が {ok:true} のときだけ true。25 秒で打ち切り
@@ -151,6 +151,7 @@ function mailPreview(c, b, s) {
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
   L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));
+  if (s.mapUrl) L.push('地図：' + s.mapUrl);
   L.push('当日お会いできるのを楽しみにしております。');
   return L.join('\n');
 }

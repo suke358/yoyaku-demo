@@ -68,6 +68,7 @@ function customerBody(c, b, s) {
   L.push('■ 場所');
   if (s.address) L.push(s.address);
   if (s.parking) L.push(s.parking);
+  if (s.mapUrl) L.push('地図：' + s.mapUrl);
   L.push('');
   L.push('当日お会いできるのを楽しみにしております。');
   L.push('');
