@@ -10,8 +10,9 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.jsonc' },
       isolatedStorage: true,
       miniflare: {
-        // テスト用の秘密の変数（本物ではない。お店の画面の API を呼ぶため）
-        bindings: { ADMIN_PASSWORD: 'test-admin-password' },
+        // テスト用の秘密の変数（本物ではない）。.dev.vars に本物の GAS の URL があっても、ここの値が勝つ（テストから本物の GAS にメールを送らないため）
+        // GAS_URL は test/api.test.js が偽物の fetch で受け止める（demo でないお店の写し先でも、テストの予約がお店の Gmail から出ない）
+        bindings: { ADMIN_PASSWORD: 'test-admin-password', GAS_URL: 'https://gas.test/exec', GAS_TOKEN: 'test-gas-token' },
       },
     }),
   ],

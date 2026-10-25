@@ -181,7 +181,7 @@ function shopInfo() {
 
 // GAS（お店の Gmail から送る係）へ送る。返事が {ok:true} のときだけ true。25 秒で打ち切り
 /** @param {Env} env @param {unknown} payload @returns {Promise<boolean>} */
-async function sendGas(env, payload) {
+export async function sendGas(env, payload) {   // テストから直接呼べるように export
   var ctl = new AbortController();
   var tm = setTimeout(function () { ctl.abort(); }, 25000);
   try {

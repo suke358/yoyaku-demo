@@ -2,9 +2,9 @@
 // 守ること：営業日／前10分・後10分（枠の長さ）／メニューの slot／長いメニューは開始時間が絞られる／予約停止は選べない／当日は締切前まで／きざみ／二重予約は 409／busy に中身を出さない
 // お店の値（前後の分・きざみ・締切・メニュー）は public/shop.jsonc から読む（ここに数字を決め打ちしない）
 import { SELF, env } from 'cloudflare:test';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
-import { forgetOld, migrate } from '../src/worker.js';
+import { forgetOld, migrate, sendGas } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -31,7 +31,23 @@ const book = (date, start, menuName, extra) => post('/api/book', { date, start, 
 const setHours = async (date, s, e) => { const r = await admin('POST', 'hours', { date, s, e }); expect(r.status).toBe(200); };
 const blocksOf = async (date) => { const all = await (await admin('GET', 'all')).json(); return all.blocks.filter((b) => b.date === date); };
 
+// 外への送信は全部ここで受け止める（テストと Worker は同じ実行環境なので、Worker の fetch にも効く）。
+// GAS（vitest.config.js の GAS_URL のテスト値）には {ok:true} の偽物の返事。それ以外の外向きの fetch はエラーにして、本物のどこにも届かせない。
+// → demo でないお店の写し先（colore など）でこのテストを回しても、お店の Gmail からメールは出ない
+const gasCalls = [];
+beforeAll(() => {
+  vi.stubGlobal('fetch', async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === env.GAS_URL) {
+      gasCalls.push(JSON.parse(String(init && init.body || '{}')));
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('テストからは外へ送らない: ' + url);
+  });
+});
+
 beforeEach(async () => {
+  gasCalls.length = 0;
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(NOW_UTC));
   // テストごとに D1 をまっさらに（前のテストの予約・営業時間を持ちこさない）。表は最初の /api/days で作られる
@@ -324,5 +340,21 @@ describe('合言葉の連続ミス（同じ接続元から 5 回で 10 分止め
     vi.setSystemTime(new Date('2027-03-10T15:05:00Z'));   // 日本時間の翌日 0:05
     await api('/api/days');
     expect(await rows()).toHaveLength(0);
+  });
+});
+
+describe('テストから本物の GAS に届かない（2026/10/25）', () => {
+  it('GAS の URL はテスト値で、Worker の送信（sendGas）は偽物の fetch が受け止めて成功を返す', async () => {
+    expect(env.GAS_URL).toBe('https://gas.test/exec');
+    expect(env.GAS_TOKEN).toBe('test-gas-token');
+    const ok = await sendGas(env, { token: env.GAS_TOKEN, customer: { name: 'テスト' }, booking: {}, shop: {} });
+    expect(ok).toBe(true);
+    expect(gasCalls).toHaveLength(1);
+    expect(gasCalls[0].token).toBe('test-gas-token');
+  });
+  it('本物らしい URL（script.google.com）へは送れず、失敗（false）になる', async () => {
+    const ok = await sendGas({ ...env, GAS_URL: 'https://script.google.com/macros/s/xxxx/exec' }, { token: 'x' });
+    expect(ok).toBe(false);
+    expect(gasCalls).toHaveLength(0);
   });
 });
