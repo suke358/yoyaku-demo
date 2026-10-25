@@ -72,12 +72,19 @@ var SCHEMA = [
 var ready = null;
 // 名前・電話・メールの列（2026/10/25）。新しい表は CREATE に入っていないので、ここで足す（前からある表にも同じ手順で足せる）
 var PII_COLS = ['name', 'tel', 'email'];
+// 列は 1 本ずつ足す。同時アクセスで別の実行環境が先に足していると「duplicate column」になるが、それは「もう足されている」だけなので握りつぶして続ける。ほかのエラーはそのまま投げる
 /** @param {D1Database} db */
-async function migrate(db) {
+export async function migrate(db) {   // テストから直接呼べるように export
   await db.batch(SCHEMA.map(function (q) { return db.prepare(q); }));
   var cols = /** @type {{ name: string }[]} */ ((await db.prepare('PRAGMA table_info(blocks)').all()).results).map(function (c) { return c.name; });
   var add = PII_COLS.filter(function (c) { return cols.indexOf(c) < 0; });
-  if (add.length) await db.batch(add.map(function (c) { return db.prepare('ALTER TABLE blocks ADD COLUMN ' + c + " TEXT NOT NULL DEFAULT ''"); }));
+  for (var i = 0; i < add.length; i++) {
+    try {
+      await db.prepare('ALTER TABLE blocks ADD COLUMN ' + add[i] + " TEXT NOT NULL DEFAULT ''").run();
+    } catch (/** @type {any} */ e) {
+      if (!/duplicate column/i.test(String(e && e.message || e))) throw e;
+    }
+  }
 }
 /** @param {D1Database} db */
 function ensureTables(db) {
@@ -228,7 +235,8 @@ async function handleBook(request, env) {
   var name = String(b.name || '').trim().slice(0, 40), tel = String(b.tel || '').trim(), email = String(b.email || '').trim();
   if (!name) return json({ error: 'お名前を入れてください' }, 400);
   if (!/^[0-9\-]{10,13}$/.test(tel)) return json({ error: '電話番号を数字で入れてください' }, 400);
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 100) return json({ error: 'メールアドレスの形を確かめてください' }, 400);
+  // 「?」「&」「=」「,」「;」「<」「>」入りは弾く（お店の画面の mailto: に宛先以外の指定（cc など）が混ざるのを防ぐ）
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || /[?&=,;<>]/.test(email) || email.length > 100) return json({ error: 'メールアドレスの形を確かめてください' }, 400);
   var cust = { name: name, tel: tel, email: email };
   var now = nowJST();
   if (b.date < now.date) return json({ error: '過ぎた日です' }, 400);

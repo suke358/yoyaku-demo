@@ -4,7 +4,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
-import { forgetOld } from '../src/worker.js';
+import { forgetOld, migrate } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -240,5 +240,28 @@ describe('名前・電話・メール（お店の画面用。2026/10/25）', () 
     expect(bl.find((b) => b.s === '10:00')).toMatchObject({ kind: 'man', name: '山田 花子', tel: '', email: '' });
     expect(bl.find((b) => b.s === '12:00')).toMatchObject({ kind: 'man', name: '' });
     expect(bl.find((b) => b.s === '15:00')).toMatchObject({ kind: 'stop', name: '' });
+  });
+});
+
+describe('守り（2026/10/25 夜）', () => {
+  it('列を足す migrate を同時に 2 回走らせても両方成功する（duplicate column は握りつぶす）', async () => {
+    // いちど列を落として、足す前の状態にする
+    await env.DB.batch(['name', 'tel', 'email'].map((c) => env.DB.prepare('ALTER TABLE blocks DROP COLUMN ' + c)));
+    const cols0 = (await env.DB.prepare('PRAGMA table_info(blocks)').all()).results.map((c) => c.name);
+    expect(cols0).not.toContain('name');
+    await expect(Promise.all([migrate(env.DB), migrate(env.DB)])).resolves.toHaveLength(2);
+    const cols = (await env.DB.prepare('PRAGMA table_info(blocks)').all()).results.map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(['name', 'tel', 'email']));
+    // もう一度走らせても何も起きない
+    await expect(migrate(env.DB)).resolves.toBeUndefined();
+  });
+  it('メールに ? & = , ; < > が入っていると 400（mailto: に宛先以外の指定が混ざるのを防ぐ）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    for (const bad of ['a@b.com?cc=x@y.com', 'a@b.com&bcc=x@y.com', 'a@b.com,c@d.com', 'a@b.com;c@d.com', '<a@b.com>', 'a=b@c.com']) {
+      const r = await book(FAR, '10:00', M_SLOT.name, { email: bad });
+      expect(r.status, bad).toBe(400);
+    }
+    expect(await blocksOf(FAR)).toHaveLength(0);
+    expect((await book(FAR, '10:00', M_SLOT.name, { email: 'ok.name+tag@example.co.jp' })).status).toBe(200);
   });
 });

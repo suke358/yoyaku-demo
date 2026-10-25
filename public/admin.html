@@ -262,7 +262,7 @@ function renderDay(){
     var net=x.kind=="net", nm=x.name||(net?"（お名前なし）":"LINE・電話の予約");
     var ct="";
     if(net){   // ネット予約：メール（押すとメール作成）を先に、電話はさらに小さく
-      if(x.email)ct+="<a href='mailto:"+esc(x.email)+"'>"+esc(x.email)+"</a>";
+      if(x.email)ct+="<a href='mailto:"+encodeURIComponent(x.email)+"'>"+esc(x.email)+"</a>";   // 宛先は encode してから（? & などが指定として効かないように）
       if(x.tel)ct+="<a class='tel' href='tel:"+esc(String(x.tel).replace(/[^0-9+]/g,""))+"'>"+esc(x.tel)+"</a>";
     }
     h+="<div class='ti "+(net?"net":"man")+"'><span><span class='nm'>"+esc(nm)+"</span><span class='tm'>"+x.s+"〜"+x.e+"</span><br>"+
