@@ -10,7 +10,7 @@
 //
 // GET  /api/days                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
 // POST /api/book {date,start,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
-// /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ）
+// /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
 //   POST   /api/admin/hours  {date,s,e}          営業時間を入れる・変える
@@ -66,8 +66,12 @@ var SCHEMA = [
   'CREATE TABLE IF NOT EXISTS hours (date TEXT PRIMARY KEY, s TEXT NOT NULL, e TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS blocks (id TEXT PRIMARY KEY, date TEXT NOT NULL, s TEXT NOT NULL, e TEXT NOT NULL, kind TEXT NOT NULL, menu TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL)',
   'CREATE INDEX IF NOT EXISTS blocks_date ON blocks(date)',
-  'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+  'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  // 合言葉の連続ミス（2026/10/25）：接続元 IP ごとの回数と止める期限。IP はここにだけ持ち、ログにも画面にも出さない。day（日本時間の日付）の翌日に消す
+  "CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until TEXT NOT NULL DEFAULT '', day TEXT NOT NULL)"
 ];
+var LOCK_N = 5, LOCK_MIN = 10;   // 5 回で 10 分
+var LOCK_MSG = 'しばらくしてからお試しください';
 /** @type {Promise<unknown>|null} */
 var ready = null;
 // 名前・電話・メールの列（2026/10/25）。新しい表は CREATE に入っていないので、ここで足す（前からある表にも同じ手順で足せる）
@@ -96,7 +100,10 @@ function ensureTables(db) {
 // 該当の行がなければ何も書かない
 /** @param {D1Database} db @param {string} todayKey */
 export function forgetOld(db, todayKey) {   // テストから直接呼べるように export
-  return db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey).run();
+  return db.batch([
+    db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey),
+    db.prepare('DELETE FROM auth_fail WHERE day < ?1').bind(todayKey)   // 合言葉を間違えた接続元の記録も翌日に消す
+  ]);
 }
 
 /** @param {unknown} body @param {number} [status] @param {Record<string,string>} [extra] @returns {Response} */
@@ -271,7 +278,26 @@ async function handleBook(request, env) {
 async function handleAdmin(request, env, path) {
   if (!env.ADMIN_PASSWORD) return json({ error: 'ADMIN_PASSWORD が設定されていません（wrangler secret put ADMIN_PASSWORD）' }, 500);
   var pw = request.headers.get('X-Admin-Password') || '';
-  if (pw !== env.ADMIN_PASSWORD) return json({ error: 'パスワードが違います' }, 401);
+  // 合言葉の連続ミス：同じ接続元から 5 回間違えたら 10 分止める。止まっている間は正しい合言葉でも通さない（文言は 1 つだけ。理由・残り時間は出さない）
+  var ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  var nowIso = new Date().toISOString();
+  var fail = /** @type {{ n: number, until: string }|null} */ (await env.DB.prepare('SELECT n, until FROM auth_fail WHERE ip = ?1').bind(ip).first());
+  if (fail && fail.until && fail.until > nowIso) return json({ error: LOCK_MSG }, 429);
+  if (pw !== env.ADMIN_PASSWORD) {
+    // 加算は 1 つの命令で（同時に来ても数が飛ばない）。前の止めが切れたあとの間違いは 1 から数え直す。n が 5 以上になった回で止める
+    var untilIso = new Date(Date.now() + LOCK_MIN * 60000).toISOString();
+    var r = /** @type {{ n: number }} */ (await env.DB.prepare(
+      "INSERT INTO auth_fail (ip, n, until, day) VALUES (?1, 1, '', ?3) " +
+      'ON CONFLICT(ip) DO UPDATE SET ' +
+      "  n = CASE WHEN auth_fail.until <> '' AND auth_fail.until <= ?2 THEN 1 ELSE auth_fail.n + 1 END, " +
+      "  until = CASE WHEN (CASE WHEN auth_fail.until <> '' AND auth_fail.until <= ?2 THEN 1 ELSE auth_fail.n + 1 END) >= ?5 THEN ?4 ELSE '' END, " +
+      '  day = ?3 ' +
+      'RETURNING n'
+    ).bind(ip, nowIso, nowJST().date, untilIso, LOCK_N).first());
+    if (r && r.n >= LOCK_N) return json({ error: LOCK_MSG }, 429);
+    return json({ error: 'パスワードが違います' }, 401);
+  }
+  if (fail) await env.DB.prepare('DELETE FROM auth_fail WHERE ip = ?1').bind(ip).run();   // 正しい合言葉で入れたら、その接続元の回数を 0 に
   var m = request.method;
   if (path === 'login' && m === 'POST') return json({ ok: true });
   if (path === 'all' && m === 'GET') {

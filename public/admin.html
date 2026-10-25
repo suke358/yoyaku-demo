@@ -161,6 +161,7 @@ function api(path,method,body){
   return fetch("/api/admin/"+path,{method:method||"GET",headers:{"content-type":"application/json","X-Admin-Password":getPw()},body:body?JSON.stringify(body):undefined,cache:"no-store"})
   .then(function(r){return r.json().catch(function(){return {}}).then(function(j){
     if(r.status==401){logout();throw new Error("パスワードが違います");}
+    if(r.status==429)throw new Error("しばらくしてからお試しください");   // 合言葉を何度も間違えて止まっている（理由・残り時間は出さない）
     if(!r.ok)throw new Error(j.error||("エラー "+r.status));
     return j})});
 }

@@ -36,7 +36,7 @@ beforeEach(async () => {
   vi.setSystemTime(new Date(NOW_UTC));
   // テストごとに D1 をまっさらに（前のテストの予約・営業時間を持ちこさない）。表は最初の /api/days で作られる
   await api('/api/days');
-  await env.DB.batch([env.DB.prepare('DELETE FROM blocks'), env.DB.prepare('DELETE FROM hours')]);
+  await env.DB.batch([env.DB.prepare('DELETE FROM blocks'), env.DB.prepare('DELETE FROM hours'), env.DB.prepare('DELETE FROM auth_fail')]);
 });
 
 describe('時計', () => {
@@ -263,5 +263,66 @@ describe('守り（2026/10/25 夜）', () => {
     }
     expect(await blocksOf(FAR)).toHaveLength(0);
     expect((await book(FAR, '10:00', M_SLOT.name, { email: 'ok.name+tag@example.co.jp' })).status).toBe(200);
+  });
+});
+
+describe('合言葉の連続ミス（同じ接続元から 5 回で 10 分止める。2026/10/25）', () => {
+  const LOCK_MSG = 'しばらくしてからお試しください';
+  const tryPw = (pw, ip) => api('/api/admin/login', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Admin-Password': pw, 'CF-Connecting-IP': ip || '203.0.113.1' }, body: '{}' });
+  const rows = async () => (await env.DB.prepare('SELECT ip, n, until FROM auth_fail').all()).results;
+  it('4 回目までは 401、5 回目で 429 になり、以後は正しい合言葉でも 429。文言は 1 つだけで残り時間は出さない', async () => {
+    for (let i = 0; i < 4; i++) expect((await tryPw('wrong')).status).toBe(401);
+    const r5 = await tryPw('wrong');
+    expect(r5.status).toBe(429);
+    expect(await r5.json()).toEqual({ error: LOCK_MSG });
+    expect(r5.headers.get('retry-after')).toBeNull();
+    const ok = await tryPw(ADMIN);
+    expect(ok.status).toBe(429);
+    expect(await ok.json()).toEqual({ error: LOCK_MSG });
+    expect((await tryPw('wrong')).status).toBe(429);
+  });
+  it('同時に 10 回間違えても、通る（401 で試せる）のは 4 回まで。あとは 429 で、正しい合言葉も止まる', async () => {
+    const rs = await Promise.all(Array.from({ length: 10 }, () => tryPw('wrong')));
+    const codes = rs.map((r) => r.status);
+    expect(codes.filter((c) => c === 401).length).toBeLessThanOrEqual(4);
+    expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(6);
+    expect(codes.every((c) => c === 401 || c === 429)).toBe(true);
+    expect((await tryPw(ADMIN)).status).toBe(429);
+    expect((await rows())[0].n).toBe(10);   // 加算は 1 つの命令なので同時でも数が飛ばない
+  });
+  it('10 分たつと解除され、正しい合言葉で入れる。そのあとの間違いは 1 から数え直す', async () => {
+    for (let i = 0; i < 5; i++) await tryPw('wrong');
+    vi.setSystemTime(new Date(new Date(NOW_UTC).getTime() + 9 * 60000));
+    expect((await tryPw(ADMIN)).status).toBe(429);   // 9 分ではまだ
+    vi.setSystemTime(new Date(new Date(NOW_UTC).getTime() + 10 * 60000 + 1000));
+    expect((await tryPw(ADMIN)).status).toBe(200);
+    expect(await rows()).toHaveLength(0);           // 正解で 0 に（行が消える）
+    for (let i = 0; i < 5; i++) await tryPw('wrong');
+    vi.setSystemTime(new Date(new Date(NOW_UTC).getTime() + 21 * 60000));
+    expect((await tryPw('wrong')).status).toBe(401);   // 止めが切れたあとの間違いは 1 回目
+    expect((await rows())[0].n).toBe(1);
+  });
+  it('別の接続元（IP）には影響しない', async () => {
+    for (let i = 0; i < 5; i++) await tryPw('wrong', '203.0.113.1');
+    expect((await tryPw(ADMIN, '203.0.113.1')).status).toBe(429);
+    expect((await tryPw(ADMIN, '198.51.100.7')).status).toBe(200);
+    expect((await tryPw('wrong', '198.51.100.7')).status).toBe(401);
+  });
+  it('正しい合言葉で入れたら回数は 0 に戻る（4 回間違え → 正解 → また 4 回間違えても 401 のまま）', async () => {
+    for (let i = 0; i < 4; i++) await tryPw('wrong');
+    expect((await rows())[0].n).toBe(4);
+    expect((await tryPw(ADMIN)).status).toBe(200);
+    expect(await rows()).toHaveLength(0);
+    for (let i = 0; i < 4; i++) expect((await tryPw('wrong')).status).toBe(401);
+    expect((await tryPw('wrong')).status).toBe(429);
+  });
+  it('IP の記録は翌日（日本時間）に消える。お客さん向け /api/days にも出ない', async () => {
+    for (let i = 0; i < 2; i++) await tryPw('wrong');
+    expect(await rows()).toHaveLength(1);
+    const days = await (await api('/api/days')).text();
+    expect(days).not.toMatch(/203\.0\.113|auth_fail/);
+    vi.setSystemTime(new Date('2027-03-10T15:05:00Z'));   // 日本時間の翌日 0:05
+    await api('/api/days');
+    expect(await rows()).toHaveLength(0);
   });
 });
