@@ -8,7 +8,7 @@
 <!--
   Lift-Off 部品「予約カレンダー」お客さんの画面（2026/10/20）。お店ごとの値は /shop.jsonc（店名・色・メニュー・片づけの分 など）。
   考え方：お店は「営業時間」だけ入れる → お客さんがメニューを選ぶと、メニューの長さ＋片づけの時間で空いている開始時間が出る → 予約が入るとその分だけ埋まる。
-  サーバー（/api）が持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存しない。
+  サーバー（/api）は「日にち・時間・埋まっている時間」と、お店の画面で見るための名前・電話・メール（来店日の翌日に自動で空）を持つ。お客さん向けの /api/days には名前などは出ない（2026/10/25）。
   名前・電話・メール（必須）を /api/book に渡し、サーバーがお店の Gmail（GAS）から確認メール＋知らせを送る（2026/10/21）。送れなければ予約は取り消され、案内が出る。
   デモ（shop.jsonc の demo: true）では、メールは送らず、予約のあとに確認メールの見本を出す。
 -->
@@ -235,7 +235,7 @@ function send(){
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ml)){e.textContent="メールアドレスの形を確かめてください";return}
   var m=SHOP.menus[cur.m], c=cur, btn=document.getElementById("fSend");
   btn.disabled=true;btn.textContent="送っています…";e.textContent="";
-  var body={date:c.k,start:c.t,menu:m.name,name:n,tel:t,email:ml};   // 枠の長さはサーバーがメニューから決める   // サーバーが枠を取り、メールを送る（名前・電話・メールは保存しない）
+  var body={date:c.k,start:c.t,menu:m.name,name:n,tel:t,email:ml};   // 枠の長さはサーバーがメニューから決める   // サーバーが枠を取り、メールを送る（名前・電話・メールはお店の画面用に預かり、来店日の翌日に空になる）
   fetch("/api/book",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
   .then(function(r){return r.json().then(function(j){return {status:r.status,body:j}})})
   .then(function(res){

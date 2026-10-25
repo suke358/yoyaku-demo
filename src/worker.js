@@ -238,7 +238,7 @@ async function handleBook(request, env) {
   var menu = menuOf(b.menu);
   if (!menu) return json({ error: 'メニューを選んでください' }, 400);
   var slot = slotOf(menu);   // 枠をふさぐ長さ（前の時間＋施術＋後の時間、か メニューの slot）
-  // 名前・電話・メール（保存はしない。GAS へ渡すだけ）
+  // 名前・電話・メール（GAS へ渡し、お店の画面用に台帳へ。来店日の翌日に空にする）
   var name = String(b.name || '').trim().slice(0, 40), tel = String(b.tel || '').trim(), email = String(b.email || '').trim();
   if (!name) return json({ error: 'お名前を入れてください' }, 400);
   if (!/^[0-9\-]{10,13}$/.test(tel)) return json({ error: '電話番号を数字で入れてください' }, 400);
