@@ -1,5 +1,6 @@
 // 予約カレンダー（Lift-Off の部品）の API　2026/10/20（10/21：お店の Gmail（GAS）から確認メール＋知らせ・先の上限なし・デモの切りかえ）
-// 持つのは「日にち・時間・埋まっている時間」だけ。名前・電話・メールは保存しない（枠を押さえたあと GAS へ渡すだけ）
+// 持つのは「日にち・時間・埋まっている時間」と、お店の画面で見るための 名前・電話・メール（2026/10/25〜。来店日の翌日（日本時間）に自動で空にする）
+// 名前・電話・メールは お店の画面の API（合言葉つき）にだけ出す。お客さん向けの /api/days には出さない。ログにも出さない
 // お店ごとの値は public/shop.jsonc の1つ。ここにお店の名前や値は書かない
 //
 // 知らせ：/api/book が名前・電話・メールも受け取り、D1 で枠を押さえたあと GAS（お店の Gmail から送る係。gas/Code.gs）へ POST。
@@ -11,10 +12,10 @@
 // POST /api/book {date,start,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ）
 //   POST   /api/admin/login                      合っていれば ok
-//   GET    /api/admin/all                        hours・blocks（kind・menu つき）・settings
+//   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
 //   POST   /api/admin/hours  {date,s,e}          営業時間を入れる・変える
 //   DELETE /api/admin/hours  {date}              休みにする（ネット予約がある日は 409）
-//   POST   /api/admin/block  {date,s,e[,menu,kind]} LINE・電話の予約（kind man）か 予約停止（kind stop）を入れる（重なったら 409）
+//   POST   /api/admin/block  {date,s,e[,menu,kind,name]} LINE・電話の予約（kind man。name は任意。電話・メールは持たない）か 予約停止（kind stop）を入れる（重なったら 409）
 //   DELETE /api/admin/block  {id}                予約を取り消す（あける）
 //   POST   /api/admin/settings {key,value}       型などを保存（value は JSON）
 // GET  /manifest.webmanifest・/apple-touch-icon.png  お店の画面をホーム画面に置くときの名前とアイコン
@@ -25,7 +26,7 @@ import shopText from '../public/shop.jsonc';
 /** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
 /** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean }} Shop */
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
-/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string }} Block */
+/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
 /** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string }} Booking */
 /** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
@@ -69,10 +70,26 @@ var SCHEMA = [
 ];
 /** @type {Promise<unknown>|null} */
 var ready = null;
+// 名前・電話・メールの列（2026/10/25）。新しい表は CREATE に入っていないので、ここで足す（前からある表にも同じ手順で足せる）
+var PII_COLS = ['name', 'tel', 'email'];
+/** @param {D1Database} db */
+async function migrate(db) {
+  await db.batch(SCHEMA.map(function (q) { return db.prepare(q); }));
+  var cols = /** @type {{ name: string }[]} */ ((await db.prepare('PRAGMA table_info(blocks)').all()).results).map(function (c) { return c.name; });
+  var add = PII_COLS.filter(function (c) { return cols.indexOf(c) < 0; });
+  if (add.length) await db.batch(add.map(function (c) { return db.prepare('ALTER TABLE blocks ADD COLUMN ' + c + " TEXT NOT NULL DEFAULT ''"); }));
+}
 /** @param {D1Database} db */
 function ensureTables(db) {
-  if (!ready) ready = db.batch(SCHEMA.map(function (q) { return db.prepare(q); })).catch(function (e) { ready = null; throw e; });
+  if (!ready) ready = migrate(db).catch(function (e) { ready = null; throw e; });
   return ready;
+}
+// 来店日の翌日（日本時間）になったら、名前・電話・メールを空にする（枠の記録は残す）。
+// Cron ではなく、/api/… のアクセスのたびに走らせる：仕組みが1つ増えず、お店の画面を開く前（どのアクセスでも）に必ず消えている。
+// 該当の行がなければ何も書かない
+/** @param {D1Database} db @param {string} todayKey */
+export function forgetOld(db, todayKey) {   // テストから直接呼べるように export
+  return db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey).run();
 }
 
 /** @param {unknown} body @param {number} [status] @param {Record<string,string>} [extra] @returns {Response} */
@@ -118,10 +135,10 @@ async function readJson(request) {
 /** @param {D1Database} db @param {Block} b @returns {Promise<boolean>} */
 async function insertBlock(db, b) {
   var r = await db.prepare(
-    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at) ' +
-    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE NOT EXISTS (' +
+    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) ' +
+    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (' +
     '  SELECT 1 FROM blocks WHERE date = ?2 AND s < ?4 AND e > ?3)'
-  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at).run();
+  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '').run();
   return r.meta && r.meta.changes > 0;
 }
 
@@ -223,7 +240,7 @@ async function handleBook(request, env) {
   if ((s - m2(h.s)) % STEP_MIN !== 0) return json({ error: '開始時間の形が違います' }, 400);
   if (s < m2(h.s) || e > m2(h.e)) return json({ error: '営業時間の外です' }, 400);
   var id = newId();
-  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString() });
+  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString(), name: name, tel: tel, email: email });   // 名前・電話・メールはお店の画面用（翌日に空にする）
   if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);
 
   // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
@@ -251,7 +268,7 @@ async function handleAdmin(request, env, path) {
   if (path === 'login' && m === 'POST') return json({ ok: true });
   if (path === 'all' && m === 'GET') {
     var hours = (await env.DB.prepare('SELECT date, s, e FROM hours ORDER BY date').all()).results;
-    var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu FROM blocks ORDER BY date, s').all()).results;
+    var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu, name, tel, email FROM blocks ORDER BY date, s').all()).results;
     var st = /** @type {{ key: string, value: string }[]} */ ((await env.DB.prepare('SELECT key, value FROM settings').all()).results);
     /** @type {Record<string, unknown>} */
     var settings = {};
@@ -281,7 +298,7 @@ async function handleAdmin(request, env, path) {
     if (m2(b.s) < m2(h.s) || m2(b.e) > m2(h.e) + BUFFER_MIN) return json({ error: '営業時間の外です' }, 400);
     var kind = b.kind === 'stop' ? 'stop' : 'man';   // stop ＝ 予約停止（名前・内容なし。お客さんの画面では空きに出ないだけ。2026/10/21）
     var id = newId();
-    var ok = await insertBlock(env.DB, { id: id, date: b.date, s: b.s, e: b.e, kind: kind, menu: kind === 'stop' ? '' : String(b.menu || '').slice(0, 40), created_at: new Date().toISOString() });
+    var ok = await insertBlock(env.DB, { id: id, date: b.date, s: b.s, e: b.e, kind: kind, menu: kind === 'stop' ? '' : String(b.menu || '').slice(0, 40), created_at: new Date().toISOString(), name: kind === 'stop' ? '' : String(b.name || '').trim().slice(0, 40) });   // 手入力は名前だけ任意。電話・メールは持たない
     if (!ok) return json({ error: 'ほかの予約と重なっています' }, 409);
     return json({ ok: true, id: id });
   }
@@ -319,6 +336,7 @@ export default {
     if (p.indexOf('/api/') !== 0) return env.ASSETS.fetch(request);
     try {
       await ensureTables(env.DB);
+      await forgetOld(env.DB, nowJST().date);   // 来店日が過ぎた予約の名前・電話・メールを空にする
       if (DEMO) await demoPrepare(env.DB);
       if (p === '/api/days' && request.method === 'GET') return await handleDays(env);
       if (p === '/api/book' && request.method === 'POST') return await handleBook(request, env);

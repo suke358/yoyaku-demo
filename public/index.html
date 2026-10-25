@@ -219,7 +219,7 @@ function openForm(k,t){
    "<div class='selbox'>"+jp(k)+"　"+t+"〜<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+(slotOf(m)!=m.min?"<br><small>所要 約"+slotOf(m)+"分（カウンセリング・お片づけを含む）</small>":"")+"</span></div>"+
    "<label class='f'>お名前<span class='req'>必須</span></label><input type='text' id='fName' autocomplete='name' placeholder='例：山田 花子'>"+
    "<label class='f'>電話番号<span class='req'>必須</span></label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
-   "<label class='f'>メールアドレス<span class='req'>必須</span></label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'><p class='note' style='margin:4px 0 0'>確認メールをお送りします。お間違いのないようにご入力ください。</p>"+
+   "<label class='f'>メールアドレス<span class='req'>必須</span></label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'><p class='note' style='margin:4px 0 0'>確認メールをお送りします。お間違いのないようにご入力ください。</p>"+(SHOP.demo===true?"<p class='note' style='margin:6px 0 0'><b>デモです。実際のお名前・電話・メールは入れないでください</b></p>":"")+
    "<div class='policy'><b>キャンセルについて</b><br>"+esc(SHOP.cancelPolicy)+"<br>ご変更・キャンセルは LINE かお電話でお知らせください。"+(SHOP.notice?"<br><b>"+esc(SHOP.notice)+"</b>":"")+"<label class='agree'><input type='checkbox' id='fAgree' onchange=\"document.getElementById('fSend').disabled=!this.checked\">キャンセルの決まりを確認しました</label></div>"+
    "<div class='err' id='fErr'></div><button class='btn main' id='fSend' onclick='send()' disabled>この内容で予約する</button><button class='btn ghost' onclick='closeForm()'>やめる</button>";
   document.getElementById("sheet").classList.add("on");

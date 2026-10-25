@@ -16,7 +16,10 @@
   ホーム画面に置くと「〇〇 予約管理」の名前とアイコン（/manifest.webmanifest・/apple-touch-icon.png）
 -->
 <style>
-:root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80}
+:root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--ok:#2f7a42;--okbg:#eef8f0;--okbd:#9fd3ab;--mute:#9c8a80;
+  --bg-accent:#e8f0fb;--border-accent:#9ab6e0;--text-accent:#1f4e8c;   /* 予約の行（薄い青・青い枠・濃い青の文字）2026/10/25 */
+  --stop:#4b5563;   /* 予約停止の行（gray-600 相当の固定の灰色。モードが変わっても同じ） */
+  color-scheme:light}   /* この画面は白地で固定。文字は濃い色なのでダークモードの端末でもそのまま読める */
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:15px;line-height:1.6}
@@ -31,7 +34,7 @@ label.f{display:block;font-size:13px;color:#6b5a52;margin:10px 0 4px}
 input[type=text],input[type=password],select{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
 .agree{display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:14px}
 .agree input{width:20px;height:20px;margin-top:2px;flex:none}
-.err{color:#d33;font-size:13px;min-height:18px;margin-top:6px}
+.err{color:var(--ink);font-weight:bold;font-size:13px;min-height:18px;margin-top:6px}   /* 赤は使わない */
 .btn{display:block;width:100%;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:bold;margin-top:12px}
 .btn.main{background:var(--main);color:#fff}
 .btn.ghost{background:#fff;border:1px solid var(--line)}
@@ -47,24 +50,38 @@ input[type=text],input[type=password],select{width:100%;font-size:16px;padding:1
 .month-h{display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px}
 .month-h button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:4px 10px}
 .month{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
-.dow{font-size:11px;text-align:center;color:var(--mute)}.dow.sun{color:#d77}.dow.sat{color:#68a}
+.dow{font-size:11px;text-align:center;color:var(--mute)}.dow.sun,.dow.sat{color:var(--mute)}   /* 赤は使わない */
 .dc{height:50px;border:1px solid var(--line);background:#fff;border-radius:9px;font-size:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0}
 .dc.open{background:var(--soft);border-color:var(--main)}
 .dc.full{background:#efe9e6;border-color:#c9bcb6}
 .dc.sel{outline:2px solid var(--sub);outline-offset:1px}
 .dc.past{opacity:.35}
 .dc small{font-size:9px;line-height:1.15;color:var(--main)}
-.dc small.bk{color:#e53935;font-weight:bold}
+.dc small.bk{color:var(--text-accent);font-weight:bold}   /* ●＝ネット予約あり（青）*/
 .dc small.fl{color:#7d6a62;font-weight:bold}
 .hours{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}
 .hours select{width:auto;font-size:15px;padding:7px}
 .tl{margin-top:10px}
 .ti{display:flex;justify-content:space-between;align-items:center;gap:8px;border-radius:10px;padding:9px 11px;margin-top:6px;font-size:14px}
-.ti.net{background:#fff4f4;border:1px solid #f0b9b9}
-.ti.man{background:#f3efec;border:1px solid #d9cec8}
-.ti.stop{background:#eceff1;border:1px solid #b0bec5;color:#455a64}  /* 予約停止（お店が止めた時間。2026/10/21） */
-.ti.free{background:var(--okbg);border:1px dashed var(--okbd);color:var(--ok)}
-.ti button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 8px;font-size:12px;white-space:nowrap}
+.ti.net,.ti.man{background:var(--bg-accent);border:1px solid var(--border-accent)}   /* 予約の行（薄い青）*/
+.ti.stop{background:var(--stop);border:1px solid var(--stop);color:#fff}   /* 予約停止（濃い灰色・白い文字）*/
+.ti button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;white-space:nowrap;color:var(--ink)}
+.ti.stop button{border-color:#fff;color:var(--stop)}
+.ti .nm{font-weight:bold;font-size:15px}
+.ti .tm{margin-left:8px;font-size:13px}
+.tag{display:inline-block;font-size:11px;line-height:1.5;border-radius:6px;padding:0 6px;margin-right:5px;vertical-align:middle;border:1px solid var(--text-accent)}
+.tag.net{background:var(--text-accent);color:#fff}   /* ネット＝濃い青の札（白い文字）*/
+.tag.man{background:#fff;color:var(--text-accent)}   /* LINE・電話＝白い札（青い枠・青い文字）*/
+.ti .ct{display:block;font-size:12px;margin-top:2px}
+.ti .ct a{color:var(--text-accent)}
+.ti .ct a.tel{font-size:11px;margin-left:10px}
+.dayhead{display:flex;justify-content:space-between;align-items:baseline}
+.dayhead small{color:var(--mute);font-size:12px;white-space:nowrap;margin-left:8px}
+details.fold{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+details.fold summary{cursor:pointer;font-weight:bold;list-style:none;padding:4px 0}
+details.fold summary::-webkit-details-marker{display:none}
+details.fold summary::before{content:"▸ "}
+details.fold[open] summary::before{content:"▾ "}
 .blk{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .blk select{width:auto;font-size:15px;padding:7px}
 .smallbtn{border:1px solid var(--sub);color:var(--sub);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px}
@@ -106,13 +123,13 @@ details.more summary{cursor:pointer;padding:4px 0}
   <div class="card">
     <div class="mode"><button id="mPat" class="on" onclick="setMode('pat')">営業日を入れる</button><button id="mDay" onclick="setMode('day')">予約を見る・入れる</button></div>
     <div id="patBox">
-      <div class="note" style="margin-bottom:6px">型を選んで、日にちを続けて押すだけ。（「休み」で消せます）</div>
+      <div class="note" style="margin-bottom:6px">営業時間を選んで、日にちを続けて押してください。（「休み」で消せます）</div>
       <div class="pat" id="pat"></div>
       <div id="patEdit" style="margin-top:8px"></div>
     </div>
     <div class="month-h"><button onclick="moveMonth(-1)">‹</button><b id="mTitle"></b><button onclick="moveMonth(1)">›</button></div>
     <div class="month" id="month"></div>
-    <p class="note" style="margin-top:8px">ピンク＝営業日（時間を表示）／灰色＝もう予約できない／<span style="color:#e53935">●</span>＝ネット予約あり</p>
+    <p class="note" style="margin-top:8px">ピンク＝営業日（時間を表示）／灰色＝もう予約できない／<span style="color:var(--text-accent)">●</span>＝ネット予約あり</p>
   </div>
   <div class="card" id="dayBox" style="display:none"></div>
   <div class="foot"><a href="/">お客さんの画面</a>｜<a href="#" onclick="logout();return false">このスマホから出る</a></div>
@@ -201,7 +218,7 @@ function renderAdmin(){
   var ph="";PATS.forEach(function(p,i){ph+="<button class='"+(pat==i?"on":"")+"' onclick='pat="+i+";renderAdmin()'>"+esc(p.name)+"<small>"+p.s+"〜"+p.e+"</small></button>"});
   ph+="<button class='off "+(pat==-1?"on":"")+"' onclick='pat=-1;renderAdmin()'>休み<small>消す</small></button>";
   document.getElementById("pat").innerHTML=ph;
-  document.getElementById("patEdit").innerHTML=editPat?patEditor():"<button class='smallbtn' onclick='editPat=true;renderAdmin()'>✎ 型を作る・直す</button>";
+  document.getElementById("patEdit").innerHTML=editPat?patEditor():"<button class='smallbtn' onclick='editPat=true;renderAdmin()'>✎ 営業時間の組み合わせを作る・直す</button>";
   document.getElementById("mTitle").textContent=view.getFullYear()+"年"+(view.getMonth()+1)+"月";
   var h="";DOW.forEach(function(w,i){h+="<div class='dow"+(i==0?" sun":i==6?" sat":"")+"'>"+w+"</div>"});
   var first=view.getDay(),n=new Date(view.getFullYear(),view.getMonth()+1,0).getDate();
@@ -231,32 +248,47 @@ function renderDay(){
   var b=document.getElementById("dayBox");
   if(mode!="day"||!sel){b.style.display="none";return}
   b.style.display="block";var hh=hours[sel];
-  if(!hh){b.innerHTML="<b>"+jp(sel)+"</b><div class='empty'>この日は休みです。「営業日を入れる」で型を当ててください。</div>";return}
-  var h="<b>"+jp(sel)+"</b><div class='hours'>営業時間 <select onchange='chH(\"s\",this.value)'>"+opts(hh.s)+"</select>〜<select onchange='chH(\"e\",this.value)'>"+opts(hh.e)+"</select></div>";
-  var bl=(blocks[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1}),t=hh.s,items=[];
-  bl.forEach(function(x){if(m2(x.s)>m2(t))items.push({free:1,s:t,e:x.s});items.push(x);if(m2(x.e)>m2(t))t=x.e});
-  if(m2(hh.e)>m2(t))items.push({free:1,s:t,e:hh.e});
+  if(!hh){b.innerHTML="<div class='dayhead'><b>"+jp(sel)+"</b></div><div class='empty'>この日は休みです。「営業日を入れる」で営業時間を当ててください。</div>";return}
+  // 日の見出し（右に小さく営業時間）→ 予約と予約停止の一覧（時間順。空きの行は出さない）→ 折りたたみ（2026/10/25）
+  var h="<div class='dayhead'><b>"+jp(sel)+"</b><small>営業 "+hh.s+"〜"+hh.e+"</small></div>";
+  var bl=(blocks[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1});
   h+="<div class='tl'>";
-  items.forEach(function(x){
-    if(x.free)h+="<div class='ti free'><span>"+x.s+"〜"+x.e+"　空き</span></div>";
-    else if(x.kind=="stop")h+="<div class='ti stop'><span>"+x.s+"〜"+x.e+"　<b>予約停止</b><br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','停止を消しました（HP でまた予約できます）')\">停止を消す</button></div>";
-    else h+="<div class='ti "+x.kind+"'><span>"+x.s+"〜"+x.e+"　"+(x.kind=="net"?"<b style='color:#c62828'>ネット予約</b> "+esc(x.menu||""):"LINE・電話の予約"+(x.menu?" "+esc(x.menu):""))+"<br><small style='color:#9c8a80'>来店から（前後の時間込み）</small></span><button onclick=\"unblock('"+esc(x.id)+"')\">"+(x.kind=="net"?"キャンセル（あける）":"取り消す")+"</button></div>";
+  if(!bl.length)h+="<div class='empty'>この日の予約はまだありません</div>";
+  bl.forEach(function(x){
+    if(x.kind=="stop"){
+      h+="<div class='ti stop'><span><b>予約停止</b>　"+x.s+"〜"+x.e+"<br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','予約停止をやめました（HP でまた予約できます）')\">予約停止をやめる</button></div>";
+      return;
+    }
+    var net=x.kind=="net", nm=x.name||(net?"（お名前なし）":"LINE・電話の予約");
+    var ct="";
+    if(net){   // ネット予約：メール（押すとメール作成）を先に、電話はさらに小さく
+      if(x.email)ct+="<a href='mailto:"+esc(x.email)+"'>"+esc(x.email)+"</a>";
+      if(x.tel)ct+="<a class='tel' href='tel:"+esc(String(x.tel).replace(/[^0-9+]/g,""))+"'>"+esc(x.tel)+"</a>";
+    }
+    h+="<div class='ti "+(net?"net":"man")+"'><span><span class='nm'>"+esc(nm)+"</span><span class='tm'>"+x.s+"〜"+x.e+"</span><br>"+
+       "<span class='tag "+(net?"net":"man")+"'>"+(net?"ネット":"LINE・電話")+"</span>"+esc(x.menu||"")+"<small style='color:var(--mute)'>（カウンセリング・お片づけを含む）</small>"+
+       (ct?"<span class='ct'>"+ct+"</span>":"")+"</span><button onclick=\"unblock('"+esc(x.id)+"')\">予約を取り消す</button></div>";
   });
   h+="</div>";
+  // この日の営業時間を変える（折りたたみ）
+  h+="<details class='fold'><summary>この日の営業時間を変える</summary><div class='hours'>営業時間 <select onchange='chH(\"s\",this.value)'>"+opts(hh.s)+"</select>〜<select onchange='chH(\"e\",this.value)'>"+opts(hh.e)+"</select></div></details>";
   var fs=firstFree()||hh.s;
-  h+="<div class='sub'><b>LINE・電話で受けた予約を入れる</b>"+
+  // 折りたたみ1：LINE・電話で受けた予約を入れる（初期は閉じる）
+  h+="<details class='fold'><summary>LINE・電話で受けた予約を入れる</summary>"+
     "<div class='blk'>始まり <select id='bS' onchange='syncEnd()'>"+opts10(fs)+"</select></div>"+
-    "<div class='note' style='margin:8px 0 6px'>予約の型を押すと、その長さで入ります（前"+PRE()+"分・後"+POST()+"分も自動で）</div><div class='pat'>";
+    "<label class='f'>お名前（任意）</label><input type='text' id='bName' maxlength='40' placeholder='例：山田 花子' autocomplete='off'>"+
+    (SHOP.demo===true?"<div class='note' style='margin-top:4px'>デモです。実際のお名前・電話・メールは入れないでください</div>":"")+
+    "<div class='note' style='margin:8px 0 6px'>メニューを押すと、その長さで入ります（前"+PRE()+"分・後"+POST()+"分も自動で）</div><div class='pat'>";
   BPATS.forEach(function(p){h+="<button onclick='block("+(+p.min)+",\""+esc(p.name)+"\")'>"+esc(p.name)+"<small>"+p.min+"分</small></button>"});
-  h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ 予約の型を作る・直す</button>")+"</div>";
+  h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ メニューを作る・直す</button>")+"</div>";
   h+="<details class='more' style='margin-top:12px'><summary>終わりの時間を選んで入れる</summary>"+
     "<div class='blk'>〜 <select id='bE'>"+opts10(t2(m2(fs)+60))+"</select></div>"+
     "<label class='agree' style='margin-top:8px'><input type='checkbox' id='bBuf' checked>あとに片づけの時間（"+POST()+"分）も入れる</label>"+
-    "<button class='btn main' style='margin-top:8px' onclick='blockFree()'>この時間で予約を入れる</button></details></div>";
-  // 予約停止：日にちと時間を選んで押すだけ（名前・内容なし。お客さんの画面ではその時間が空きに出ないだけ。2026/10/21）
-  h+="<div class='sub'><b>この時間は予約停止</b><div class='note'>ネット予約を受けない時間を入れます（休憩・外出・予約の前後をあけたいとき など）。</div>"+
+    "<button class='btn main' style='margin-top:8px' onclick='blockFree()'>この時間で予約を入れる</button></details></details>";
+  // 折りたたみ2：この時間は予約停止（名前・内容なし。お客さんの画面ではその時間が空きに出ないだけ。2026/10/21）
+  h+="<details class='fold'><summary>この時間は予約停止</summary><div class='note'>ネット予約を受けない時間を入れます（休憩・外出・予約の前後をあけたいとき など）。</div>"+
     "<div class='blk'><select id='sS'>"+opts10(fs)+"</select>〜<select id='sE'>"+opts10(t2(Math.min(m2(fs)+60,23*60)))+"</select></div>"+
-    "<button class='btn ghost' style='margin-top:8px;border-color:#b0bec5;color:#455a64' onclick='stopFree()'>この時間を予約停止にする</button></div>";
+    "<button class='btn ghost' style='margin-top:8px;border-color:var(--stop);color:var(--stop)' onclick='stopFree()'>この時間を予約停止にする</button></details>";
   b.innerHTML=h;
 }
 function firstFree(){var st=starts(sel,shortest());return st[0]}
@@ -265,9 +297,10 @@ function chH(w,v){var hh=hours[sel],n={s:hh.s,e:hh.e};n[w]=v;if(m2(n.s)>=m2(n.e)
 var t10=[];for(var mm=6*60;mm<=23*60;mm+=10)t10.push(t2(mm));
 function opts10(v){return t10.map(function(t){return "<option"+(t==v?" selected":"")+">"+t+"</option>"}).join("")}
 function syncEnd(){var s=document.getElementById("bS").value,e=document.getElementById("bE");if(!e)return;if(m2(e.value)<=m2(s))e.value=t2(Math.min(m2(s)+60,23*60))}
+function bName(){var el=document.getElementById("bName");return el?el.value.trim():""}
 function addBlock(s,e,label,menu,kind){var hh=hours[sel];
   if(m2(s)<m2(hh.s)||m2(e)>m2(hh.e)+POST()){toast("営業時間の外です（営業時間を先に変えてください）");return}
-  api("block","POST",{date:sel,s:s,e:e,menu:menu||"",kind:kind||"man"}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
+  api("block","POST",{date:sel,s:s,e:e,menu:menu||"",kind:kind||"man",name:kind=="stop"?"":bName()}).then(function(){toast(label);return reload()}).catch(function(e){toast(e.message)})}
 function stopFree(){var s=document.getElementById("sS").value,e=document.getElementById("sE").value;
   if(m2(e)<=m2(s)){toast("終わりを始まりより後にしてください");return}
   addBlock(s,e,s+"〜"+e+" を予約停止にしました","","stop")}
@@ -276,21 +309,21 @@ function blockFree(){var s=document.getElementById("bS").value,e=document.getEle
   var buf=document.getElementById("bBuf").checked?POST():0;
   addBlock(s,t2(m2(e)+buf),s+"〜"+e+" の予約を入れました","")}
 function block(mn,name){var s=document.getElementById("bS").value;var mm=null;SHOP.menus.forEach(function(x){if(x.name==name)mm=x});var len=mm?slotOf(mm):PRE()+mn+POST();
-  addBlock(s,t2(m2(s)+len),s+" から "+(name?name+" ":"")+len+"分（前後の時間込み）の予約を入れました",name)}
+  addBlock(s,t2(m2(s)+len),s+" から "+(name?name+" ":"")+len+"分（カウンセリング・お片づけを含む）の予約を入れました",name)}
 function unblock(id,msg){api("block","DELETE",{id:id}).then(function(){toast(msg||"あけました（HP でまた予約できます）");return reload()}).catch(function(e){toast(e.message)})}
 
 /* 予約の型（お店が変えられる） */
 var lens=[];for(var L=10;L<=240;L+=10)lens.push(L);
 function bpatEditor(){
-  var h="<div class='pe'><div class='note' style='margin-bottom:4px'>よく受ける予約の名前と長さです（最大8つ）。</div>";
+  var h="<div class='pe'><div class='note' style='margin-bottom:4px'>よく受けるメニューの名前と長さです（最大8つ）。</div>";
   BPATS.forEach(function(p,i){h+="<div class='r'><input type='text' value='"+esc(p.name)+"' maxlength='10' oninput='BPATS["+i+"].name=this.value'>"+
     "<select onchange='BPATS["+i+"].min=+this.value'>"+lens.map(function(l){return "<option value='"+l+"'"+(l==p.min?" selected":"")+">"+l+"分</option>"}).join("")+"</select>"+
     "<button class='x' onclick='delBpat("+i+")'>✕</button></div>"});
-  h+="<div class='acts'>"+(BPATS.length<8?"<button style='border:1px solid var(--main);color:var(--main);background:#fff' onclick='BPATS.push({name:\"新しい型\",min:60});renderDay()'>＋ 型を足す</button>":"")+
+  h+="<div class='acts'>"+(BPATS.length<8?"<button style='border:1px solid var(--main);color:var(--main);background:#fff' onclick='BPATS.push({name:\"新しいメニュー\",min:60});renderDay()'>＋ メニューを足す</button>":"")+
      "<button style='border:0;background:var(--main);color:#fff' onclick='saveBpat()'>完了</button></div></div>";return h}
-function delBpat(i){if(BPATS.length<=1){toast("型は1つ以上いります");return}BPATS.splice(i,1);renderDay()}
+function delBpat(i){if(BPATS.length<=1){toast("メニューは1つ以上いります");return}BPATS.splice(i,1);renderDay()}
 function saveBpat(){for(var i=0;i<BPATS.length;i++)if(!BPATS[i].name.trim()){toast("名前を入れてください");return}
-  api("settings","POST",{key:"bpats",value:BPATS}).then(function(){editB=false;renderDay();toast("予約の型を保存しました")}).catch(function(e){toast(e.message)})}
+  api("settings","POST",{key:"bpats",value:BPATS}).then(function(){editB=false;renderDay();toast("メニューを保存しました")}).catch(function(e){toast(e.message)})}
 
 /* 営業日の型（お店が変えられる） */
 function patEditor(){
@@ -308,7 +341,7 @@ function delPat(i){if(PATS.length<=1){toast("型は1つ以上いります");retu
 function savePat(){
   for(var i=0;i<PATS.length;i++){var p=PATS[i];if(!p.name.trim()){toast("名前を入れてください");return}if(m2(p.s)>=m2(p.e)){toast("「"+p.name+"」の終わりを始まりより後にしてください");return}}
   api("settings","POST",{key:"pats",value:PATS}).then(function(){return api("settings","POST",{key:"step",value:SHOP.stepMin})})
-  .then(function(){editPat=false;renderAdmin();toast("型を保存しました（入れた営業日は変わりません）")}).catch(function(e){toast(e.message)})}
+  .then(function(){editPat=false;renderAdmin();toast("営業時間の組み合わせを保存しました（入れた営業日は変わりません）")}).catch(function(e){toast(e.message)})}
 
 /* ---------- 最初：お店の設定を読む → パスワード ---------- */
 fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(function(t){

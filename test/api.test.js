@@ -4,6 +4,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
+import { forgetOld } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -128,7 +129,7 @@ describe('予約停止（お店の画面で入れた時間）', () => {
     const busy = d.busy[FAR];
     expect(busy.some((b) => b.s === '13:00' && b.e === '14:00')).toBe(true);
     expect(busy.every((b) => b.kind === 'busy' && !('menu' in b) && !('id' in b))).toBe(true);
-    expect(JSON.stringify(d)).not.toMatch(/stop|man|net|テスト 太郎/);
+    expect(JSON.stringify(d)).not.toMatch(/stop|man|net|テスト 太郎|090-0000-0000|test@example.com|name|tel|email/);
   });
 });
 
@@ -182,5 +183,62 @@ describe('入力の確かめ', () => {
   });
   it('お店の画面の API は合言葉がないと 401', async () => {
     expect((await api('/api/admin/all')).status).toBe(401);
+  });
+});
+
+describe('名前・電話・メール（お店の画面用。2026/10/25）', () => {
+  it('ネット予約の名前・電話・メールは保存され、お店の画面の API（合言葉つき）に出る', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await book(FAR, '10:00', M_SLOT.name)).status).toBe(200);
+    const bl = await blocksOf(FAR);
+    expect(bl).toHaveLength(1);
+    expect(bl[0]).toMatchObject({ kind: 'net', name: 'テスト 太郎', tel: '090-0000-0000', email: 'test@example.com' });
+  });
+  it('お客さん向けの /api/days には、名前・電話・メールもその欄の名前も絶対に出ない', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await book(FAR, '10:00', M_SLOT.name)).status).toBe(200);
+    const text = JSON.stringify(await (await api('/api/days')).json());
+    expect(text).not.toMatch(/テスト 太郎|090-0000-0000|test@example\.com|"name"|"tel"|"email"|"menu"|"id"/);
+  });
+  it('お店の画面の API は合言葉がないと 401（all・block）。間違った合言葉も 401', async () => {
+    expect((await api('/api/admin/all')).status).toBe(401);
+    expect((await post('/api/admin/block', { date: FAR, s: '10:00', e: '11:00' })).status).toBe(401);
+    expect((await api('/api/admin/all', { headers: { 'X-Admin-Password': 'wrong' } })).status).toBe(401);
+  });
+  it('来店日の翌日（日本時間）になると、名前・電話・メールは空になる（枠の記録は残る）', async () => {
+    await setHours(TODAY, '10:00', '22:00');
+    expect((await book(TODAY, '14:00', M_SLOT.name)).status).toBe(200);
+    expect((await blocksOf(TODAY))[0].name).toBe('テスト 太郎');
+    // 日本時間の翌日 0:05 に進める（UTC では前日 15:05）
+    vi.setSystemTime(new Date('2027-03-10T15:05:00Z'));
+    await api('/api/days');                               // お客さん側のアクセスでも消える
+    // 翌日には、名前・電話・メールがどこにも残らない。
+    // 本番（demo:false）は forgetOld が行を残して 3 つの欄を空にする。デモ（demo:true）はそのあと demoPrepare が過ぎた日の行ごと消す（前からの仕組み）
+    const all = await (await admin('GET', 'all')).json();
+    expect(JSON.stringify(all)).not.toMatch(/テスト 太郎|090-0000-0000|test@example\.com/);
+    const bl = all.blocks.filter((b) => b.date === TODAY);
+    bl.forEach((b) => expect(b).toMatchObject({ name: '', tel: '', email: '' }));
+    // forgetOld そのもの（本番の道）：過ぎた日の行に直接 名前を入れ、forgetOld を通すと 3 つの欄が空になり、行は残る
+    await env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) VALUES ('t1', '2027-03-09', '10:00', '11:00', 'net', 'm', '2027-03-09T00:00:00Z', 'テスト 太郎', '090-0000-0000', 'test@example.com')").run();
+    await forgetOld(env.DB, '2027-03-11');
+    const row = await env.DB.prepare("SELECT * FROM blocks WHERE id = 't1'").first();
+    expect(row).toMatchObject({ s: '10:00', name: '', tel: '', email: '' });
+  });
+  it('当日のうちは消えない', async () => {
+    await setHours(TODAY, '10:00', '22:00');
+    expect((await book(TODAY, '14:00', M_SLOT.name)).status).toBe(200);
+    vi.setSystemTime(new Date('2027-03-10T14:50:00Z'));   // 日本時間 23:50（まだ当日）
+    await api('/api/days');
+    expect((await blocksOf(TODAY))[0].name).toBe('テスト 太郎');
+  });
+  it('LINE・電話で受けた予約の手入力は、名前だけ任意で入る。電話・メールは送っても持たない。予約停止には名前が付かない', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await admin('POST', 'block', { date: FAR, s: '10:00', e: '11:00', menu: '電話', name: ' 山田 花子 ', tel: '090-1111-1111', email: 'x@example.com' })).status).toBe(200);
+    expect((await admin('POST', 'block', { date: FAR, s: '12:00', e: '13:00', menu: '電話' })).status).toBe(200);
+    expect((await admin('POST', 'block', { date: FAR, s: '15:00', e: '16:00', kind: 'stop', name: '止め' })).status).toBe(200);
+    const bl = await blocksOf(FAR);
+    expect(bl.find((b) => b.s === '10:00')).toMatchObject({ kind: 'man', name: '山田 花子', tel: '', email: '' });
+    expect(bl.find((b) => b.s === '12:00')).toMatchObject({ kind: 'man', name: '' });
+    expect(bl.find((b) => b.s === '15:00')).toMatchObject({ kind: 'stop', name: '' });
   });
 });

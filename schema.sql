@@ -1,4 +1,6 @@
--- 予約カレンダーのデモ（hiyori）の表。名前・電話・メールは持たない
+-- 予約カレンダーのデモ（hiyori）の表（控え。本物は src/worker.js の SCHEMA＋migrate が最初のアクセスで作る）
+-- 2026/10/25：blocks に 名前・電話・メールの列を足した（お店の画面で見る用。来店日の翌日に自動で空にする）。
+--   前からある表には worker.js の migrate が ALTER TABLE blocks ADD COLUMN name/tel/email TEXT NOT NULL DEFAULT '' で足す（手で流すなら同じ 3 文）
 -- 作り方：手元 npx wrangler d1 execute yoyaku-demo --local --file schema.sql ／ 本番 --remote
 CREATE TABLE IF NOT EXISTS hours (
   date TEXT PRIMARY KEY,   -- "2026-10-21"
@@ -12,7 +14,10 @@ CREATE TABLE IF NOT EXISTS blocks (
   e TEXT NOT NULL,         -- 終わり（片づけの時間込み）
   kind TEXT NOT NULL,      -- 'net'（ネット予約）か 'man'（お店が手で入れた）
   menu TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',   -- お客さんの名前（ネット予約・手入力は任意）。翌日に ''
+  tel TEXT NOT NULL DEFAULT '',    -- 電話（ネット予約だけ）。翌日に ''
+  email TEXT NOT NULL DEFAULT ''   -- メール（ネット予約だけ）。翌日に ''
 );
 CREATE INDEX IF NOT EXISTS blocks_date ON blocks(date);
 CREATE TABLE IF NOT EXISTS settings (
