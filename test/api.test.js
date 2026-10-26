@@ -381,9 +381,7 @@ describe('HP から空きを読む（CORS と menus。2026/10/26）', () => {
     expect((await days(NG_ORIGIN)).headers.get('access-control-allow-origin')).toBeNull();
     expect((await days()).headers.get('access-control-allow-origin')).toBeNull();
   });
-  it('/api/book と /api/admin には、許可した Origin でも CORS ヘッダが付かない', async () => {
-    const b = await post('/api/book', {}, { Origin: OK_ORIGIN });
-    expect(b.headers.get('access-control-allow-origin')).toBeNull();
+  it('/api/admin には、許可した Origin でも CORS ヘッダが付かない（/api/book は 2026/10/26 から付く。下の組で確かめる）', async () => {
     const a = await api('/api/admin/all', { headers: { Origin: OK_ORIGIN, 'X-Admin-Password': ADMIN } });
     expect(a.status).toBe(200);
     expect(a.headers.get('access-control-allow-origin')).toBeNull();
@@ -412,5 +410,69 @@ describe('HP から空きを読む（CORS と menus。2026/10/26）', () => {
     const d = await (await days(OK_ORIGIN)).json();
     expect(d.busy[FAR]).toEqual([{ s: '13:00', e: '14:00', kind: 'busy' }]);
     expect(JSON.stringify(d)).not.toContain('山田');
+  });
+});
+
+describe('HP から予約を送る（/api/book の CORS と事前確認。2026/10/26）', () => {
+  const OK_ORIGIN = (SHOP.allowOrigins || [])[0];
+  const NG_ORIGIN = 'https://evil.example';
+  const bookFrom = (origin, body) => post('/api/book', body, origin ? { Origin: origin } : {});
+  const good = { date: FAR, start: '10:00', menu: M_SLOT.name, name: 'HP 花子', tel: '090-0000-0000', email: 'hp@example.com' };
+  const options = (path, origin) => api(path, { method: 'OPTIONS', headers: origin ? { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' } : {} });
+  it('許可した Origin からの予約は 200 で CORS ヘッダ付き。台帳に入り、/api/days には名前・電話・メールが出ない', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await bookFrom(OK_ORIGIN, good);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect(r.headers.get('vary')).toBe('Origin');
+    const rows = await blocksOf(FAR);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'net', name: 'HP 花子', tel: '090-0000-0000', email: 'hp@example.com' });
+    const d = await (await api('/api/days', { headers: { Origin: OK_ORIGIN } })).json();
+    expect(d.busy[FAR]).toEqual([{ s: '10:00', e: t2(m2('10:00') + slotOf(M_SLOT)), kind: 'busy' }]);
+    expect(JSON.stringify(d)).not.toMatch(/HP 花子|090-0000-0000|hp@example\.com/);
+  });
+  it('失敗の返事（409 の二重予約・400 の入力不足）にも CORS ヘッダが付く（HP 側が文を読めるように）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await bookFrom(OK_ORIGIN, good)).status).toBe(200);
+    const dup = await bookFrom(OK_ORIGIN, good);
+    expect(dup.status).toBe(409);
+    expect(dup.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect((await dup.json()).error).toMatch(/たった今/);
+    const bad = await bookFrom(OK_ORIGIN, { ...good, start: '14:00', email: 'a@b.com?cc=x@y.com' });
+    expect(bad.status).toBe(400);
+    expect(bad.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect(await blocksOf(FAR)).toHaveLength(1);
+  });
+  it('許可していない Origin・Origin なしの予約には CORS ヘッダが付かない（* も出ない）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const a = await bookFrom(NG_ORIGIN, good);
+    expect(a.status).toBe(200);
+    expect(a.headers.get('access-control-allow-origin')).toBeNull();
+    const b = await bookFrom(null, { ...good, start: '14:00' });
+    expect(b.status).toBe(200);
+    expect(b.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('事前確認（OPTIONS /api/book）：許可した Origin には 204＋POST・content-type・max-age 600。許可していない Origin には CORS ヘッダなし', async () => {
+    const ok = await options('/api/book', OK_ORIGIN);
+    expect(ok.status).toBe(204);
+    expect(ok.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect(ok.headers.get('access-control-allow-methods')).toBe('POST');
+    expect(ok.headers.get('access-control-allow-headers')).toBe('content-type');
+    expect(ok.headers.get('access-control-max-age')).toBe('600');
+    const ng = await options('/api/book', NG_ORIGIN);
+    expect(ng.headers.get('access-control-allow-origin')).toBeNull();
+    expect(ng.headers.get('access-control-allow-methods')).toBeNull();
+    const none = await options('/api/book');
+    expect(none.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('/api/admin には付かず、OPTIONS にも答えない', async () => {
+    const r = await api('/api/admin/all', { headers: { Origin: OK_ORIGIN, 'X-Admin-Password': ADMIN } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+    const o = await options('/api/admin/all', OK_ORIGIN);
+    expect(o.status).not.toBe(204);
+    expect(o.headers.get('access-control-allow-origin')).toBeNull();
+    expect(o.headers.get('access-control-allow-methods')).toBeNull();
   });
 });

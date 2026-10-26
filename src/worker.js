@@ -9,7 +9,7 @@
 // デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
 //
 // GET  /api/days（allowOrigins の Origin からは CORS 付き。menus・otherMenusNote・taxNote も返す。2026/10/26）                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
-// POST /api/book {date,start,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
+// POST /api/book {date,start,menu,name,tel,email}（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
@@ -219,14 +219,34 @@ function mailPreview(c, b, s) {
   return L.join('\n');
 }
 
-// ほかのサイト（お店の HP）から /api/days を読めるようにする許可（CORS）。shop.jsonc の allowOrigins にある Origin のときだけ、その Origin を返す。
-// * は使わない。一覧にない Origin・Origin なしには付けない。/api/book・/api/admin には付けない（HP からの予約確定はしない）
+// ほかのサイト（お店の HP）から /api/days を読み、/api/book に予約を送れるようにする許可（CORS）。shop.jsonc の allowOrigins にある Origin のときだけ、その Origin を返す。
+// * は使わない。一覧にない Origin・Origin なしには付けない。/api/admin には付けない（お店の画面は同じサイトからだけ）
 /** @param {Request} request @returns {Record<string,string>} */
 function corsFor(request) {
   var origin = request.headers.get('Origin') || '';
   var list = Array.isArray(SHOP.allowOrigins) ? SHOP.allowOrigins : [];
   if (origin && list.indexOf(origin) >= 0) return { 'access-control-allow-origin': origin, 'vary': 'Origin' };
   return {};
+}
+// 返事（成功でも 400・409・502・503 でも）に、許可した Origin の CORS ヘッダを足す（HP 側が失敗の文も読めるように）。許可がなければそのまま返す
+/** @param {Response} res @param {Request} request @returns {Response} */
+function withCors(res, request) {
+  var c = corsFor(request), keys = Object.keys(c);
+  if (!keys.length) return res;
+  var h = new Headers(res.headers);
+  keys.forEach(function (k) { h.set(k, c[k]); });
+  return new Response(res.body, { status: res.status, headers: h });
+}
+// ブラウザの事前確認（OPTIONS /api/book）。許可した Origin には 204＋許可のヘッダ、許可していない Origin には 204 だけ（CORS ヘッダなし）。/api/admin には答えない
+/** @param {Request} request @returns {Response} */
+function preflightBook(request) {
+  var c = corsFor(request);
+  if (c['access-control-allow-origin']) {
+    c['access-control-allow-methods'] = 'POST';
+    c['access-control-allow-headers'] = 'content-type';
+    c['access-control-max-age'] = '600';
+  }
+  return new Response(null, { status: 204, headers: c });
 }
 /** @param {Env} env @param {Request} request */
 async function handleDays(env, request) {
@@ -380,12 +400,13 @@ export default {
     if (p === '/manifest.webmanifest') return manifest();
     if (p === '/apple-touch-icon.png' || p === '/apple-touch-icon-precomposed.png') return env.ASSETS.fetch(new Request(url.origin + '/icon-180.png', request));
     if (p.indexOf('/api/') !== 0) return env.ASSETS.fetch(request);
+    if (p === '/api/book' && request.method === 'OPTIONS') return preflightBook(request);   // 事前確認は表を触らずに返す
     try {
       await ensureTables(env.DB);
       await forgetOld(env.DB, nowJST().date);   // 来店日が過ぎた予約の名前・電話・メールを空にする
       if (DEMO) await demoPrepare(env.DB);
       if (p === '/api/days' && request.method === 'GET') return await handleDays(env, request);
-      if (p === '/api/book' && request.method === 'POST') return await handleBook(request, env);
+      if (p === '/api/book' && request.method === 'POST') return withCors(await handleBook(request, env), request);   // 許可した HP からの予約（2026/10/26）
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
     } catch (/** @type {any} */ e) {
