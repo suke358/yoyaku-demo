@@ -4,7 +4,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
-import { forgetOld, migrate, sendGas, limitCheck } from '../src/worker.js';
+import { forgetOld, migrate, sendGas, limitCheck, insertNet } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -35,11 +35,14 @@ const blocksOf = async (date) => { const all = await (await admin('GET', 'all'))
 // GAS（vitest.config.js の GAS_URL のテスト値）には {ok:true} の偽物の返事。それ以外の外向きの fetch はエラーにして、本物のどこにも届かせない。
 // → demo でないお店の写し先（colore など）でこのテストを回しても、お店の Gmail からメールは出ない
 const gasCalls = [];
+let gasMode = 'ok';   // 'ok'＝成功の返事／'drop'＝受け取ったあと返事が届かない（通信切れ）／'fail'＝500
 beforeAll(() => {
   vi.stubGlobal('fetch', async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url === env.GAS_URL) {
       gasCalls.push(JSON.parse(String(init && init.body || '{}')));
+      if (gasMode === 'drop') throw new Error('network dropped after GAS received');
+      if (gasMode === 'fail') return new Response('error', { status: 500 });
       return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
     }
     throw new Error('テストからは外へ送らない: ' + url);
@@ -47,7 +50,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
-  gasCalls.length = 0;
+  gasCalls.length = 0; gasMode = 'ok';
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(NOW_UTC));
   // テストごとに D1 をまっさらに（前のテストの予約・営業時間を持ちこさない）。表は最初の /api/days で作られる
@@ -542,5 +545,98 @@ describe('いたずら対策（A：同じ IP は 10 分に 5 回・B\'：同じ�
     const starts = ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00'];
     for (let i = 0; i < 6; i++) expect([200, 409]).toContain((await bookIp(IP1, { start: starts[i] })).status);
     expect((await env.DB.prepare('SELECT count(*) AS n FROM book_rate').first()).n).toBe(0);
+  });
+});
+
+describe('別の目のレビューの直し（2026/10/26）', () => {
+  const IS_DEMO = SHOP.demo === true;
+  const OK_ORIGIN = (SHOP.allowOrigins || [])[0];
+  const IP = '203.0.113.50';
+  const tryPw = (pw, ip, method) => api('/api/admin/login', { method: method || 'POST', headers: { 'content-type': 'application/json', ...(pw === null ? {} : { 'X-Admin-Password': pw }), 'CF-Connecting-IP': ip || IP }, body: method === 'OPTIONS' ? undefined : '{}' });
+  const bookIp = (ip, extra, origin) => post('/api/book', { date: FAR, start: '10:00', menu: M_SLOT.name, name: 'テスト', tel: '090-0000-0000', email: 'test@example.com', ...(extra || {}) }, { 'CF-Connecting-IP': ip, ...(origin ? { Origin: origin } : {}) });
+  const nowIso = () => new Date().toISOString();
+  it('高1：合言葉なしの送信や OPTIONS を何回しても、回数に数えない（お店を締め出せない）', async () => {
+    for (let i = 0; i < 6; i++) expect((await tryPw(null)).status).toBe(401);
+    for (let i = 0; i < 6; i++) expect((await tryPw(null, IP, 'OPTIONS')).status).not.toBe(204);
+    expect((await env.DB.prepare('SELECT count(*) AS n FROM auth_fail').first()).n).toBe(0);
+    expect((await tryPw(ADMIN)).status).toBe(200);
+    for (let i = 0; i < 4; i++) expect((await tryPw('wrong')).status).toBe(401);   // 値があって違うときだけ数える
+    expect((await tryPw('wrong')).status).toBe(429);
+  });
+  it('高2-A：同じ IP から 10 件を同時に送っても、通るのは 5 件まで（数えて入れるを 1 命令に）', async () => {
+    const rs = await Promise.all(Array.from({ length: 10 }, () => limitCheck(env.DB, { demo: false, ip: IP, tel: '', email: '', today: TODAY })));
+    const ok = rs.filter((r) => r === null).length;
+    expect(ok).toBeGreaterThanOrEqual(1);
+    expect(ok).toBeLessThanOrEqual(5);
+    expect((await env.DB.prepare('SELECT count(*) AS n FROM book_rate').first()).n).toBe(ok);
+  });
+  it("高2-B'：同じ電話で 8 件を同時に入れても、入るのは 3 件まで（枠を取る INSERT の条件に）", async () => {
+    const mk = (i) => ({ id: 'c' + i, date: FAR, s: t2(m2('10:00') + i * 60), e: t2(m2('10:00') + i * 60 + 30), kind: 'net', menu: 'x', created_at: nowIso(), name: 'x', tel: '090-2222-3333', email: 'c' + i + '@example.com' });
+    const rs = await Promise.all(Array.from({ length: 8 }, (_, i) => insertNet(env.DB, mk(i), { demo: false, today: TODAY })));
+    const ok = rs.filter((r) => r === null).length;
+    expect(ok).toBeGreaterThanOrEqual(1);
+    expect(ok).toBeLessThanOrEqual(3);
+    expect(rs.filter((r) => r && r.status === 429 && /3 件まで/.test(r.error)).length).toBe(8 - ok);
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM blocks WHERE kind = 'net'").first()).n).toBe(ok);
+  });
+  it.skipIf(IS_DEMO)('高2（本番の作り）：同じ IP の 10 件同時は 5 件まで、同じ電話の 8 件同時は 3 件まで。429 にも CORS', async () => {
+    await setHours(FAR, '10:00', '20:00'); await setHours(FAR2, '10:00', '20:00');
+    const rs = await Promise.all(Array.from({ length: 10 }, (_, i) => bookIp(IP, { start: t2(m2('10:00') + i * 60), tel: '090-1111-' + (1000 + i), email: 'r2-' + i + '@example.com' }, OK_ORIGIN)));
+    const ok = rs.filter((r) => r.status === 200).length;
+    expect(ok).toBeGreaterThanOrEqual(1); expect(ok).toBeLessThanOrEqual(5);
+    expect(rs.every((r) => r.headers.get('access-control-allow-origin') === OK_ORIGIN)).toBe(true);
+    const rs2 = await Promise.all(Array.from({ length: 8 }, (_, i) => bookIp('198.51.100.' + (10 + i), { date: FAR2, start: t2(m2('10:00') + i * 60), tel: '090-2222-3333', email: 'r3-' + i + '@example.com' })));
+    const ok2 = rs2.filter((r) => r.status === 200).length;
+    expect(ok2).toBeGreaterThanOrEqual(1); expect(ok2).toBeLessThanOrEqual(3);
+  });
+  it('中5：23:58 に 5 回間違えると、日付をまたいでも 10 分は解けない', async () => {
+    vi.setSystemTime(new Date('2027-03-10T14:58:00Z'));   // 日本時間 23:58
+    for (let i = 0; i < 5; i++) await tryPw('wrong');
+    vi.setSystemTime(new Date('2027-03-10T15:01:00Z'));   // 翌日 0:01（掃除が走る）
+    await api('/api/days');
+    expect((await tryPw(ADMIN)).status).toBe(429);
+    vi.setSystemTime(new Date('2027-03-10T15:09:00Z'));   // 0:09（10 分すぎ）
+    expect((await tryPw(ADMIN)).status).toBe(200);
+  });
+  it('低6：date・name などが文字でないときは 400（内部のエラー文を返さない）', async () => {
+    await setHours(TODAY, '10:00', '22:00');
+    const r = await book(TODAY, '09:00', M_SLOT.name, { date: [TODAY] });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toBe('入力の形が違います');
+    expect((await book(FAR, '10:00', M_SLOT.name, { name: 123 })).status).toBe(400);
+    expect((await book(FAR, '10:00', M_SLOT.name, { email: { a: 1 } })).status).toBe(400);
+  });
+  it('上限：受けた日（日本時間）のネット予約が 20 件あれば 429。前日に受けた分は数えない', async () => {
+    const chk = () => limitCheck(env.DB, { demo: false, ip: '', tel: '090-9999-0000', email: 'cap@example.com', today: TODAY });
+    const stmts = [];
+    for (let i = 0; i < 19; i++) stmts.push(env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) VALUES (?1, ?2, '10:00', '11:00', 'net', 'x', ?3, 'x', ?4, ?5)").bind('d' + i, '2027-04-' + String(20 + (i % 9)).padStart(2, '0'), new Date().toISOString(), '080-0000-' + String(1000 + i), 'd' + i + '@example.com'));
+    stmts.push(env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) VALUES ('old', '2027-04-29', '10:00', '11:00', 'net', 'x', ?1, 'x', '080-0000-9999', 'old@example.com')").bind('2027-03-09T10:00:00.000Z'));   // 前日に受けた分
+    stmts.push(env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at) VALUES ('man', '2027-04-29', '12:00', '13:00', 'man', 'x', ?1)").bind(new Date().toISOString()));   // 手入力は数えない
+    await env.DB.batch(stmts);
+    expect(await chk()).toBeNull();   // 今日のネット予約は 19 件
+    await env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) VALUES ('d19', '2027-04-29', '14:00', '15:00', 'net', 'x', ?1, 'x', '080-0000-1019', 'd19@example.com')").bind(new Date().toISOString()).run();
+    expect(await chk()).toMatchObject({ status: 429, error: expect.stringMatching(/上限に達しました/) });
+    const ins = await insertNet(env.DB, { id: 'x21', date: '2027-04-29', s: '16:00', e: '17:00', kind: 'net', menu: 'x', created_at: new Date().toISOString(), name: 'x', tel: '090-9999-0000', email: 'cap@example.com' }, { demo: false, today: TODAY });
+    expect(ins).toMatchObject({ status: 429, error: expect.stringMatching(/上限に達しました/) });
+  });
+  it.skipIf(IS_DEMO)('メールが送れなくても予約は残る：GAS が受け取ったあと返事が届かない→200・mail:false・台帳に「メール未送」の印。お店の画面の API に出る', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    gasMode = 'drop';
+    const r = await book(FAR, '10:00', M_SLOT.name);
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true); expect(j.mail).toBe(false); expect(j.note).toMatch(/LINE かお電話/);
+    expect(gasCalls).toHaveLength(1);
+    const rows = await blocksOf(FAR);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'net', mailng: 1 });
+    gasMode = 'fail';
+    expect((await (await book(FAR, '14:00', M_SLOT.name, { tel: '090-1111-2222', email: 'b@example.com' })).json()).mail).toBe(false);
+    gasMode = 'ok';
+    const r3 = await (await book(FAR, '16:00', M_SLOT.name, { tel: '090-1111-3333', email: 'c@example.com' })).json();
+    expect(r3.mail).toBe(true);
+    const all = await blocksOf(FAR);
+    expect(all.filter((b) => b.mailng === 1)).toHaveLength(2);
+    expect(JSON.stringify(await (await api('/api/days')).json())).not.toMatch(/mailng|テスト 太郎/);
   });
 });

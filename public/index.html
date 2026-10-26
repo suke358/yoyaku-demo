@@ -253,6 +253,7 @@ function send(){
     if(pl.length)h+="<div class='policy' style='text-align:left'><b>■ 場所</b><br>"+pl.join("<br>")+"</div>";
     // 確認メールが届かないときの案内（デモはメールを送っていないので出さない）と、HP にもどるボタン（shop.jsonc に backUrl・backText があるときだけ）
     var w2=[];if(SHOP.lineUrl)w2.push("LINE");if(SHOP.tel)w2.push("お電話");
+    if(res.body&&res.body.mail===false)h+="<p class='note warn'>"+esc(res.body.note||"確認メールをお送りできませんでした。確認メールが届かない場合は LINE かお電話でご連絡ください")+"</p>";   // メールを送れなかったが予約は入っている（2026/10/26）
     if(!(res.body&&res.body.demo))h+="<p class='note' style='margin-top:10px'>確認メールが届かないときは、迷惑メールをご確認のうえ、"+(w2.length?w2.join("か")+"で":"お店に")+"ご連絡ください。</p>";
     if(SHOP.backUrl&&SHOP.backText)h+="<div class='bottomback' style='margin-top:12px'><a class='back on' href='"+esc(SHOP.backUrl)+"'>"+esc(SHOP.backText)+"</a></div>";
     if(res.body&&res.body.demo){

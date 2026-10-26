@@ -26,7 +26,7 @@ import shopText from '../public/shop.jsonc';
 /** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
 /** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[] }} Shop */
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
-/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string }} Block */
+/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
 /** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string }} Booking */
 /** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
@@ -77,21 +77,27 @@ var RATE_N = 5, RATE_MIN = 10;   // A：同じ IP から 10 分に 5 回まで
 var FUTURE_N = 3;                // B'：同じ電話・メールの、まだ来店していないネット予約は 3 件まで
 var RATE_MSG = '短い間にたくさん送られました。しばらくしてからお試しください。お急ぎの場合は LINE かお電話でお願いします';
 var FUTURE_MSG = '同じお電話・メールでのネット予約は ' + FUTURE_N + ' 件までです。LINE かお電話でご相談ください';
+var DAILY_N = 20;                // お店全体で、受けた日（日本時間）ごとのネット予約は 1 日 20 件まで（2026/10/26 決定）
+var DAILY_MSG = '本日のネット予約の受付は上限に達しました。LINE かお電話でお願いします';
+var MAIL_NG_NOTE = '確認メールをお送りできませんでした。確認メールが届かない場合は LINE かお電話でご連絡ください';
 var LOCK_N = 5, LOCK_MIN = 10;   // 5 回で 10 分
 var LOCK_MSG = 'しばらくしてからお試しください';
 /** @type {Promise<unknown>|null} */
 var ready = null;
 // 名前・電話・メールの列（2026/10/25）。新しい表は CREATE に入っていないので、ここで足す（前からある表にも同じ手順で足せる）
 var PII_COLS = ['name', 'tel', 'email'];
+// 足す列の定義（PII の 3 つ＋ mailng＝確認メールを送れなかった印。2026/10/26 レビューの直し：メールが送れなくても予約は残す）
+/** @type {Record<string,string>} */
+var ADD_COLS = { name: "TEXT NOT NULL DEFAULT ''", tel: "TEXT NOT NULL DEFAULT ''", email: "TEXT NOT NULL DEFAULT ''", mailng: 'INTEGER NOT NULL DEFAULT 0' };
 // 列は 1 本ずつ足す。同時アクセスで別の実行環境が先に足していると「duplicate column」になるが、それは「もう足されている」だけなので握りつぶして続ける。ほかのエラーはそのまま投げる
 /** @param {D1Database} db */
 export async function migrate(db) {   // テストから直接呼べるように export
   await db.batch(SCHEMA.map(function (q) { return db.prepare(q); }));
   var cols = /** @type {{ name: string }[]} */ ((await db.prepare('PRAGMA table_info(blocks)').all()).results).map(function (c) { return c.name; });
-  var add = PII_COLS.filter(function (c) { return cols.indexOf(c) < 0; });
+  var add = Object.keys(ADD_COLS).filter(function (c) { return cols.indexOf(c) < 0; });
   for (var i = 0; i < add.length; i++) {
     try {
-      await db.prepare('ALTER TABLE blocks ADD COLUMN ' + add[i] + " TEXT NOT NULL DEFAULT ''").run();
+      await db.prepare('ALTER TABLE blocks ADD COLUMN ' + add[i] + ' ' + ADD_COLS[add[i]]).run();
     } catch (/** @type {any} */ e) {
       if (!/duplicate column/i.test(String(e && e.message || e))) throw e;
     }
@@ -109,28 +115,56 @@ function ensureTables(db) {
 export function forgetOld(db, todayKey) {   // テストから直接呼べるように export
   return db.batch([
     db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey),
-    db.prepare('DELETE FROM auth_fail WHERE day < ?1').bind(todayKey),   // 合言葉を間違えた接続元の記録も翌日に消す
+    db.prepare("DELETE FROM auth_fail WHERE day < ?1 AND (until = '' OR until <= ?2)").bind(todayKey, new Date().toISOString()),   // 合言葉を間違えた接続元の記録は翌日に消す。ただし止めている最中（until が先）の行は残す（日付をまたいで早く解けないように。2026/10/26）
     db.prepare('DELETE FROM book_rate WHERE at < ?1').bind(new Date(Date.now() - RATE_MIN * 60000).toISOString())   // 送信の記録（IP）は 10 分たったら消す
   ]);
 }
 // いたずら対策（2026/10/26）。入力の確かめを通ったあと、予約を入れる前に見る。デモ（shop.jsonc の demo:true）では見ない
 //  B'：同じ電話（ハイフンを除いて比べる）か同じメール（大文字小文字を区別しない）で、来店日が今日以降のネット予約（kind net）が FUTURE_N 件あれば 429
 //  A ：同じ接続元（IP）から RATE_MIN 分に RATE_N 回まで。超えたら 429。IP が無いとき（手元など）は見ない。予約が入った回も 409 になった回も数える（ここで記録する）
+//  上限（1 日）：受けた日（日本時間）のネット予約が DAILY_N 件あれば 429（blocks を数えるだけ）
+//  2026/10/26 レビューの直し：A の「数える→入れる」は 1 命令（INSERT … SELECT … WHERE count < N）にして、同時に送られても超えない。B' と 1 日の上限は、ここで先に見るのに加えて、枠を取る INSERT の条件にも入れる（insertNet）
+/** @param {string} todayKey @returns {string} 日本時間のその日の 0:00 を UTC の ISO で */
+function dayStartIso(todayKey) { return new Date(todayKey + 'T00:00:00+09:00').toISOString(); }
+var FUTURE_SQL = "(SELECT count(*) FROM blocks WHERE kind = 'net' AND date >= ?T AND (replace(tel, '-', '') = ?K OR lower(email) = ?M))";
+var DAILY_SQL = "(SELECT count(*) FROM blocks WHERE kind = 'net' AND created_at >= ?D)";
 /** @param {D1Database} db @param {{ demo: boolean, ip: string, tel: string, email: string, today: string }} o @returns {Promise<{ status: number, error: string }|null>} */
 export async function limitCheck(db, o) {   // テストから直接呼べるように export
   if (o.demo) return null;
   var telKey = String(o.tel || '').replace(/-/g, ''), mailKey = String(o.email || '').toLowerCase();
-  var fut = /** @type {{ n: number }} */ (await db.prepare(
-    "SELECT count(*) AS n FROM blocks WHERE kind = 'net' AND date >= ?1 AND (replace(tel, '-', '') = ?2 OR lower(email) = ?3)"
-  ).bind(o.today, telKey, mailKey).first());
-  if (fut && fut.n >= FUTURE_N) return { status: 429, error: FUTURE_MSG };
+  var c = /** @type {{ fut: number, day: number }} */ (await db.prepare(
+    'SELECT ' + FUTURE_SQL.replace('?T', '?1').replace('?K', '?2').replace('?M', '?3') + ' AS fut, ' + DAILY_SQL.replace('?D', '?4') + ' AS day'
+  ).bind(o.today, telKey, mailKey, dayStartIso(o.today)).first());
+  if (c && c.fut >= FUTURE_N) return { status: 429, error: FUTURE_MSG };
+  if (c && c.day >= DAILY_N) return { status: 429, error: DAILY_MSG };
   if (o.ip) {
+    // 数えて入れるを 1 命令で（同時に来ても RATE_N を超えない）
     var since = new Date(Date.now() - RATE_MIN * 60000).toISOString();
-    var r = /** @type {{ n: number }} */ (await db.prepare('SELECT count(*) AS n FROM book_rate WHERE ip = ?1 AND at >= ?2').bind(o.ip, since).first());
-    if (r && r.n >= RATE_N) return { status: 429, error: RATE_MSG };
-    await db.prepare('INSERT INTO book_rate (ip, at) VALUES (?1, ?2)').bind(o.ip, new Date().toISOString()).run();
+    var r = await db.prepare('INSERT INTO book_rate (ip, at) SELECT ?1, ?2 WHERE (SELECT count(*) FROM book_rate WHERE ip = ?1 AND at >= ?3) < ?4')
+      .bind(o.ip, new Date().toISOString(), since, RATE_N).run();
+    if (!(r.meta && r.meta.changes > 0)) return { status: 429, error: RATE_MSG };
   }
   return null;
+}
+// ネット予約の枠を取る（1 命令）：重なりなし・同じ電話／メールの未来の予約が FUTURE_N 未満・その日の受付が DAILY_N 未満 のときだけ入る。
+// 入らなかったときは、どの理由かを数えて返す（同時に送られても上限を超えないのはこの INSERT が守る）。デモでは重なりだけ
+/** @param {D1Database} db @param {Block} b @param {{ demo: boolean, today: string }} g @returns {Promise<{ status: number, error: string }|null>} null＝入った */
+export async function insertNet(db, b, g) {   // テストから直接呼べるように export
+  if (g.demo) return (await insertBlock(db, b)) ? null : { status: 409, error: '' };
+  var telKey = String(b.tel || '').replace(/-/g, ''), mailKey = String(b.email || '').toLowerCase(), dayStart = dayStartIso(g.today);
+  var r = await db.prepare(
+    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) ' +
+    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE date = ?2 AND s < ?4 AND e > ?3)' +
+    ' AND ' + FUTURE_SQL.replace('?T', '?11').replace('?K', '?12').replace('?M', '?13') + ' < ?14' +
+    ' AND ' + DAILY_SQL.replace('?D', '?15') + ' < ?16'
+  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '', g.today, telKey, mailKey, FUTURE_N, dayStart, DAILY_N).run();
+  if (r.meta && r.meta.changes > 0) return null;
+  var c = /** @type {{ fut: number, day: number }} */ (await db.prepare(
+    'SELECT ' + FUTURE_SQL.replace('?T', '?1').replace('?K', '?2').replace('?M', '?3') + ' AS fut, ' + DAILY_SQL.replace('?D', '?4') + ' AS day'
+  ).bind(g.today, telKey, mailKey, dayStart).first());
+  if (c && c.fut >= FUTURE_N) return { status: 429, error: FUTURE_MSG };
+  if (c && c.day >= DAILY_N) return { status: 429, error: DAILY_MSG };
+  return { status: 409, error: '' };
 }
 
 /** @param {unknown} body @param {number} [status] @param {Record<string,string>} [extra] @returns {Response} */
@@ -293,7 +327,11 @@ async function handleDays(env, request) {
 async function handleBook(request, env) {
   if (!isOpen(env)) return json({ error: 'ただいまネット予約の準備中です。LINE かお電話でお願いします' }, 503);
   var b = await readJson(request);
-  if (!b || !isDate(b.date) || !isTime(b.start)) return json({ error: '入力が足りません' }, 400);
+  if (!b || typeof b !== 'object') return json({ error: '入力が足りません' }, 400);
+  // 型の確かめ（文字でないものは 400。配列などを入れて内部のエラー文を引き出せないように。2026/10/26 レビューの直し）
+  var fields = ['date', 'start', 'menu', 'name', 'tel', 'email'];
+  for (var fi = 0; fi < fields.length; fi++) { var fv = b[fields[fi]]; if (fv !== undefined && fv !== null && typeof fv !== 'string') return json({ error: '入力の形が違います' }, 400); }
+  if (!isDate(b.date) || !isTime(b.start)) return json({ error: '入力が足りません' }, 400);
   var menu = menuOf(b.menu);
   if (!menu) return json({ error: 'メニューを選んでください' }, 400);
   var slot = slotOf(menu);   // 枠をふさぐ長さ（前の時間＋施術＋後の時間、か メニューの slot）
@@ -317,8 +355,8 @@ async function handleBook(request, env) {
   var lim = await limitCheck(env.DB, { demo: DEMO, ip: request.headers.get('CF-Connecting-IP') || '', tel: tel, email: email, today: now.date });
   if (lim) return json({ error: lim.error }, lim.status);
   var id = newId();
-  var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString(), name: name, tel: tel, email: email });   // 名前・電話・メールはお店の画面用（翌日に空にする）
-  if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);
+  var ins = await insertNet(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString(), name: name, tel: tel, email: email }, { demo: DEMO, today: now.date });   // 名前・電話・メールはお店の画面用（翌日に空にする）
+  if (ins) return json({ error: ins.error || 'たった今ほかの方の予約が入りました' }, ins.status);
 
   // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
   var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menu.name, min: +menu.min, slot: slot, price: menu.price || '' };
@@ -327,19 +365,21 @@ async function handleBook(request, env) {
     // デモ：メールは送らない。見本の文を返して画面に出す
     return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, demo: true, mailPreview: mailPreview(cust, booking, shop) });
   }
-  // 本番：枠を押さえたあとにメールを送る。送れなければ枠を取り消す
+  // 本番：枠を押さえたあとにメールを送る。送れなくても予約は残す（2026/10/26 決定。メールだけ送られて枠が消える事故を防ぐ）。台帳に「メール未送」の印（mailng）を付け、お店の画面で分かるようにする。返事は 200 で mail:false
   var sent = await sendGas(env, { token: env.GAS_TOKEN, customer: cust, booking: booking, shop: shop });
   if (!sent) {
-    await env.DB.prepare('DELETE FROM blocks WHERE id = ?1').bind(id).run();
-    return json({ error: FAIL_MSG }, 502);
+    await env.DB.prepare('UPDATE blocks SET mailng = 1 WHERE id = ?1').bind(id).run();
+    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, mail: false, note: MAIL_NG_NOTE });
   }
-  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot });
+  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, mail: true });
 }
 
 /** @param {Request} request @param {Env} env @param {string} path */
 async function handleAdmin(request, env, path) {
   if (!env.ADMIN_PASSWORD) return json({ error: 'ADMIN_PASSWORD が設定されていません（wrangler secret put ADMIN_PASSWORD）' }, 500);
+  if (request.method === 'OPTIONS') return json({ error: 'ありません' }, 404);   // 事前確認には答えない・回数にも数えない（2026/10/26 レビューの直し）
   var pw = request.headers.get('X-Admin-Password') || '';
+  if (!pw) return json({ error: 'パスワードが違います' }, 401);   // 合言葉なし（他サイトのフォームからの送信など）は、回数に数えずに 401（誰かが合言葉なしで連打してもお店を締め出せない）
   // 合言葉の連続ミス：同じ接続元から 5 回間違えたら 10 分止める。止まっている間は正しい合言葉でも通さない（文言は 1 つだけ。理由・残り時間は出さない）
   var ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   var nowIso = new Date().toISOString();
@@ -364,7 +404,7 @@ async function handleAdmin(request, env, path) {
   if (path === 'login' && m === 'POST') return json({ ok: true });
   if (path === 'all' && m === 'GET') {
     var hours = (await env.DB.prepare('SELECT date, s, e FROM hours ORDER BY date').all()).results;
-    var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu, name, tel, email FROM blocks ORDER BY date, s').all()).results;
+    var blocks = (await env.DB.prepare('SELECT id, date, s, e, kind, menu, name, tel, email, mailng FROM blocks ORDER BY date, s').all()).results;
     var st = /** @type {{ key: string, value: string }[]} */ ((await env.DB.prepare('SELECT key, value FROM settings').all()).results);
     /** @type {Record<string, unknown>} */
     var settings = {};
@@ -440,7 +480,7 @@ export default {
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
     } catch (/** @type {any} */ e) {
-      return json({ error: 'サーバーでエラー：' + String(e && e.message || e) }, 500);
+      return json({ error: 'サーバーでエラーが起きました。しばらくしてからお試しください' }, 500);   // 内部のエラー文は返さない（2026/10/26）
     }
   }
 };

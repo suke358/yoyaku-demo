@@ -59,6 +59,7 @@ input[type=text],input[type=password],select{width:100%;font-size:16px;padding:1
 .dc small{font-size:9px;line-height:1.15;color:var(--main)}
 .dc small.bk{color:var(--text-accent);font-weight:bold}   /* ●＝ネット予約あり（青）*/
 .dc small.fl{color:#7d6a62;font-weight:bold}
+.ti .mlng{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:8px;background:#fff3cd;color:#7a4b00;border:1px solid #e0b24a;font-size:11px;font-weight:bold;vertical-align:middle}   /* 確認メールを送れなかった予約（お店から連絡する）*/
 .hours{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}
 .hours select{width:auto;font-size:15px;padding:7px}
 .tl{margin-top:10px}
@@ -155,6 +156,18 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp
 function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2000)}
 function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
 
+/* ---------- 画面の押しもの（data 属性で受ける。設定の名前を JS の文字列に埋め込まない。2026/10/26） ---------- */
+document.addEventListener("click",function(e){
+  var t=e.target,i=0;
+  while(t&&t!==document&&i<5){
+    if(t.getAttribute){
+      var v=t.getAttribute("data-pat");if(v!==null){pat=+v;renderAdmin();return;}
+      if(t.getAttribute("data-act")==="editPat"){editPat=true;renderAdmin();return;}
+      var b=t.getAttribute("data-bp");if(b!==null&&BPATS[+b]){block(+BPATS[+b].min,String(BPATS[+b].name));return;}
+    }
+    t=t.parentNode;i++;
+  }
+});
 /* ---------- パスワードと API ---------- */
 function getPw(){try{return localStorage.getItem(PW_KEY)||""}catch(e){return ""}}
 function api(path,method,body){
@@ -216,10 +229,10 @@ function setMode(m){mode=m;document.getElementById("mPat").classList.toggle("on"
   renderAdmin()}
 function moveMonth(n){view=new Date(view.getFullYear(),view.getMonth()+n,1);renderAdmin()}
 function renderAdmin(){
-  var ph="";PATS.forEach(function(p,i){ph+="<button class='"+(pat==i?"on":"")+"' onclick='pat="+i+";renderAdmin()'>"+esc(p.name)+"<small>"+p.s+"〜"+p.e+"</small></button>"});
-  ph+="<button class='off "+(pat==-1?"on":"")+"' onclick='pat=-1;renderAdmin()'>休み<small>消す</small></button>";
+  var ph="";PATS.forEach(function(p,i){ph+="<button class='"+(pat==i?"on":"")+"' data-pat='"+i+"'>"+esc(p.name)+"<small>"+esc(p.s)+"〜"+esc(p.e)+"</small></button>"});
+  ph+="<button class='off "+(pat==-1?"on":"")+"' data-pat='-1'>休み<small>消す</small></button>";
   document.getElementById("pat").innerHTML=ph;
-  document.getElementById("patEdit").innerHTML=editPat?patEditor():"<button class='smallbtn' onclick='editPat=true;renderAdmin()'>✎ 営業時間の組み合わせを作る・直す</button>";
+  document.getElementById("patEdit").innerHTML=editPat?patEditor():"<button class='smallbtn' data-act='editPat'>✎ 営業時間の組み合わせを作る・直す</button>";
   document.getElementById("mTitle").textContent=view.getFullYear()+"年"+(view.getMonth()+1)+"月";
   var h="";DOW.forEach(function(w,i){h+="<div class='dow"+(i==0?" sun":i==6?" sat":"")+"'>"+w+"</div>"});
   var first=view.getDay(),n=new Date(view.getFullYear(),view.getMonth()+1,0).getDate();
@@ -228,7 +241,7 @@ function renderAdmin(){
   for(var d=1;d<=n;d++){
     var dt=new Date(view.getFullYear(),view.getMonth(),d),k=key(dt),hh=hours[k],past=dt<today;
     var net=(blocks[k]||[]).some(function(b){return b.kind=="net"}),full=hh&&starts(k,sm).length==0;
-    var mk=hh?((net?"<small class='bk'>●予約</small>":"")+(full?"<small class='fl'>満席</small>":"<small>"+hh.s.replace(":00","")+"-"+hh.e.replace(":00","")+"</small>")):"";
+    var mk=hh?((net?"<small class='bk'>●予約</small>":"")+(full?"<small class='fl'>満席</small>":"<small>"+esc(hh.s.replace(":00",""))+"-"+esc(hh.e.replace(":00",""))+"</small>")):"";
     h+="<button class='dc"+(hh?(full?" full":" open"):"")+(mode=="day"&&k==sel?" sel":"")+(past?" past":"")+"' "+(past?"disabled":"onclick=\"tapDay('"+k+"')\"")+">"+d+mk+"</button>";
   }
   document.getElementById("month").innerHTML=h;
@@ -251,13 +264,13 @@ function renderDay(){
   b.style.display="block";var hh=hours[sel];
   if(!hh){b.innerHTML="<div class='dayhead'><b>"+jp(sel)+"</b></div><div class='empty'>この日は休みです。「営業日を入れる」で営業時間を当ててください。</div>";return}
   // 日の見出し（右に小さく営業時間）→ 予約と予約停止の一覧（時間順。空きの行は出さない）→ 折りたたみ（2026/10/25）
-  var h="<div class='dayhead'><b>"+jp(sel)+"</b><small>営業 "+hh.s+"〜"+hh.e+"</small></div>";
+  var h="<div class='dayhead'><b>"+jp(sel)+"</b><small>営業 "+esc(hh.s)+"〜"+esc(hh.e)+"</small></div>";
   var bl=(blocks[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1});
   h+="<div class='tl'>";
   if(!bl.length)h+="<div class='empty'>この日の予約はまだありません</div>";
   bl.forEach(function(x){
     if(x.kind=="stop"){
-      h+="<div class='ti stop'><span><b>予約停止</b>　"+x.s+"〜"+x.e+"<br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','予約停止をやめました（HP でまた予約できます）')\">予約停止をやめる</button></div>";
+      h+="<div class='ti stop'><span><b>予約停止</b>　"+esc(x.s)+"〜"+esc(x.e)+"<br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','予約停止をやめました（HP でまた予約できます）')\">予約停止をやめる</button></div>";
       return;
     }
     var net=x.kind=="net", nm=x.name||(net?"（お名前なし）":"LINE・電話の予約");
@@ -266,7 +279,7 @@ function renderDay(){
       if(x.email)ct+="<a href='mailto:"+encodeURIComponent(x.email)+"'>"+esc(x.email)+"</a>";   // 宛先は encode してから（? & などが指定として効かないように）
       if(x.tel)ct+="<a class='tel' href='tel:"+esc(String(x.tel).replace(/[^0-9+]/g,""))+"'>"+esc(x.tel)+"</a>";
     }
-    h+="<div class='ti "+(net?"net":"man")+"'><span><span class='nm'>"+esc(nm)+"</span><span class='tm'>"+x.s+"〜"+x.e+"</span><br>"+
+    h+="<div class='ti "+(net?"net":"man")+"'><span><span class='nm'>"+esc(nm)+"</span><span class='tm'>"+esc(x.s)+"〜"+esc(x.e)+"</span>"+(x.mailng?"<span class='mlng'>メール未送</span>":"")+"<br>"+
        "<span class='tag "+(net?"net":"man")+"'>"+(net?"ネット":"LINE・電話")+"</span>"+esc(x.menu||"")+"<small style='color:var(--mute)'>（カウンセリング・お片づけを含む）</small>"+
        (ct?"<span class='ct'>"+ct+"</span>":"")+"</span><button onclick=\"unblock('"+esc(x.id)+"')\">予約を取り消す</button></div>";
   });
@@ -280,7 +293,7 @@ function renderDay(){
     "<label class='f'>お名前（任意）</label><input type='text' id='bName' maxlength='40' placeholder='例：山田 花子' autocomplete='off'>"+
     (SHOP.demo===true?"<div class='note' style='margin-top:4px'>デモです。実際のお名前・電話・メールは入れないでください</div>":"")+
     "<div class='note' style='margin:8px 0 6px'>メニューを押すと、その長さで入ります（前"+PRE()+"分・後"+POST()+"分も自動で）</div><div class='pat'>";
-  BPATS.forEach(function(p){h+="<button onclick='block("+(+p.min)+",\""+esc(p.name)+"\")'>"+esc(p.name)+"<small>"+p.min+"分</small></button>"});
+  BPATS.forEach(function(p,i){h+="<button data-bp='"+i+"'>"+esc(p.name)+"<small>"+(+p.min)+"分</small></button>"});
   h+="</div><div style='margin-top:8px'>"+(editB?bpatEditor():"<button class='smallbtn' onclick='editB=true;renderDay()'>✎ メニューを作る・直す</button>")+"</div>";
   h+="<details class='more' style='margin-top:12px'><summary>終わりの時間を選んで入れる</summary>"+
     "<div class='blk'>〜 <select id='bE'>"+opts10(t2(m2(fs)+60))+"</select></div>"+

@@ -34,3 +34,6 @@ CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DE
 -- B'（同じ電話・メールの未来のネット予約は 3 件まで）は blocks を数えるだけで表は増えない。デモ（demo:true）では両方とも見ない。
 CREATE TABLE IF NOT EXISTS book_rate (ip TEXT NOT NULL, at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS book_rate_ip ON book_rate(ip);
+
+-- 2026/10/26 レビューの直し：blocks に mailng（確認メールを送れなかった印。0/1）。worker.js の migrate が ALTER TABLE blocks ADD COLUMN mailng INTEGER NOT NULL DEFAULT 0 で足す。
+-- メールが送れなくても予約は残す（お店の画面に「メール未送」）。お店全体のネット予約は受けた日（日本時間）ごとに 1 日 20 件まで（blocks の created_at を数える。表は増えない）。
