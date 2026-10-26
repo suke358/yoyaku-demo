@@ -377,11 +377,19 @@ describe('HP から空きを読む（CORS と menus。2026/10/26）', () => {
     expect(OK_ORIGIN).toMatch(/^https:\/\//);
     expect(SHOP.allowOrigins).not.toContain('*');
   });
-  it('許可した Origin からの /api/days には、その Origin だけの CORS ヘッダと Vary: Origin が付く', async () => {
-    const r = await days(OK_ORIGIN);
-    expect(r.status).toBe(200);
-    expect(r.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
-    expect(r.headers.get('vary')).toBe('Origin');
+  it('許可した Origin からの /api/days には、その Origin だけの CORS ヘッダと Vary: Origin が付く（一覧の全部で。本番と確認用の両方を入れたときも）', async () => {
+    for (const o of SHOP.allowOrigins) {
+      const r = await days(o);
+      expect(r.status).toBe(200);
+      expect(r.headers.get('access-control-allow-origin')).toBe(o);
+      expect(r.headers.get('vary')).toBe('Origin');
+      const b = await post('/api/book', {}, { Origin: o });   // /api/book も同じ一覧
+      expect(b.headers.get('access-control-allow-origin')).toBe(o);
+    }
+    // 似ているが一覧にない Origin（http・末尾スラッシュ・別のサブドメイン）には付かない
+    for (const o of ['http://colore-yomogi.com', 'https://www.colore-yomogi.com', 'https://colore-yomogi.com.evil.example', OK_ORIGIN + '/']) {
+      expect((await days(o)).headers.get('access-control-allow-origin')).toBeNull();
+    }
   });
   it('許可していない Origin・Origin なしには CORS ヘッダが付かない（* も出ない）', async () => {
     expect((await days(NG_ORIGIN)).headers.get('access-control-allow-origin')).toBeNull();
