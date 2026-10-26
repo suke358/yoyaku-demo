@@ -134,6 +134,7 @@ details.more summary{cursor:pointer;padding:4px 0}
   </div>
   <div class="card" id="dayBox" style="display:none"></div>
   <div class="foot"><a href="/">お客さんの画面</a>｜<a href="#" onclick="logout();return false">このスマホから出る</a></div>
+  <div class="foot" id="bkLast" hidden></div>
 </section>
 </main>
 <div class="toast" id="toast"></div>
@@ -199,6 +200,8 @@ function reload(){
     (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
     (d.blocks||[]).forEach(function(b){(blocks[b.date]=blocks[b.date]||[]).push(b)});
     var st=d.settings||{};
+    // 予約のバックアップ（毎日 4:30 に自動）の最後の結果。失敗が続くときは担当者に知らせる（2026/10/26）
+    var bk=document.getElementById("bkLast");if(bk){var b=st.backup_last;if(b&&b.at){var dt=new Date(b.at);var w=(dt.getMonth()+1)+"/"+dt.getDate()+" "+("0"+dt.getHours()).slice(-2)+":"+("0"+dt.getMinutes()).slice(-2);bk.textContent=b.ok?("バックアップ：最後の成功 "+w+"（"+(b.counts&&b.counts.blocks)+" 件）"):("バックアップ：失敗 "+w+"（担当者にお知らせください）");bk.style.color=b.ok?"":"#b00020";bk.hidden=false}}
     PATS=(st.pats&&st.pats.length)?st.pats:SHOP.patterns.map(function(p){return {name:p.name,s:p.s,e:p.e}});
     BPATS=(st.bpats&&st.bpats.length)?st.bpats:SHOP.bookPatterns.map(function(p){return {name:p.name,min:p.min}});
     if(pat>=PATS.length)pat=0;

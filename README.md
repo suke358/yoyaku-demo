@@ -34,6 +34,28 @@
 - 道具は `npm ci` で入る（node_modules は git の外。Node 24）。`npm run check` で両方
 - 動きを変える直しをしたら、先にテストを直して「落ちる」のを見てから中身を直す（二重予約を止める SQL をわざと壊すと 5 件落ちることを 10/25 に確認）
 
+## 予約のバックアップ（2026/10/26。決定事項 09・規約 第13条「控えを最大 30 日」）
+- **何を**：台帳 blocks（名前・電話・メール込み。戻すため）・営業時間 hours・設定 settings の全行を 1 つの JSON に。**書かないもの**：book_rate・auth_fail（接続元 IP の記録）
+- **どこへ**：Workers KV（お店ごとに namespace。例 yoyaku-colore-backup。公開しない）。キー `backup:YYYY-MM-DD`（日本時間の日付）。**1 件ごとに expirationTtl＝2592000 秒（30 日）**で、KV が自動で消す
+- **いつ**：毎日 04:30（日本時間）の Cron（wrangler.jsonc の triggers `30 19 * * *`＝UTC）。HTTP の口はない（Cron だけ。/api/… からは読めない・書き出せない）
+- **結果**：settings の `backup_last`（ok／at／key／counts、失敗なら短い error）。お店の画面（/admin）のいちばん下に「バックアップ：最後の成功 10/27 04:30（12 件）」か赤字で「失敗（担当者にお知らせください）」
+- **大きさの目安**：予約 1 件 ≒ 250 バイト。1 日 1 回の put（無料枠は 1,000 回／日）・保存は 30 日分でも数 MB（無料枠 1 GB）。KV の 1 値 25 MiB ＝ 約 10 万件分
+- **KV の注意**：読み出しは「最終的に一致」（書いた直後は別の場所から古い値が見えることがある）。バックアップは 1 日 1 回書くだけなので影響なし。TTL は秒単位で、消えるのは期限から少し遅れることがある
+- **手元で試す**：`npx vitest run`（テストの中で偽物の KV に書き、中身・TTL・IP の表が無いこと・戻しを確かめる）。手で動かすときは `npx wrangler dev --test-scheduled` → `curl "http://localhost:8787/__scheduled?cron=30+19+*+*+*"`（手元の D1・KV に書く。本番には触らない）
+
+### 戻す手順（マニュアルの下書き。本番の D1 には戻さない。まずテスト用の空の D1 で）
+1. どの日の控えを戻すか決める：`npx wrangler kv key list --binding BACKUP --remote --prefix backup:`（キーの一覧。期限 expiration も出る）
+2. 取り出す：`npx wrangler kv key get --binding BACKUP --remote backup:2026-10-27 > /tmp/backup.json`（この JSON には名前・電話・メールが入っている。終わったら消す。git・iCloud に置かない）
+3. 戻す SQL を作る：`node tools/restore_backup.mjs /tmp/backup.json > /tmp/restore.sql`（blocks・hours・settings の INSERT。表が無ければ作る文も入る）
+4. テスト用の空の D1 に流す：wrangler.jsonc にテスト用の D1（例 binding DB_TEST）を一時的に足すか、`npx wrangler d1 execute <テスト用 DB 名> --remote --file /tmp/restore.sql`
+5. 行数を比べる：`node tools/restore_backup.mjs /tmp/backup.json --counts` が出す件数と、`SELECT count(*) FROM blocks` などの結果が同じか
+- つまずき：①JSON の文字コードは UTF-8（名前の文字化け）②同じ id が既にあると INSERT が止まる（空の D1 に戻すのが前提。本番に戻すのは担当者の判断で、戻す前に本番の控えを取る）③settings の `backup_last` は戻さない（控えには入れていない）
+- 終わった確かめ：/admin（テスト用）で件数と直近の予約が見える・/api/days に名前が出ない・JSON と SQL を消した
+
+### 解約のとき（規約には書かない。手順だけ）
+- そのお店の KV の全キーを消す：`npx wrangler kv key list --binding BACKUP --remote --prefix backup:` で一覧 → `npx wrangler kv bulk delete --binding BACKUP --remote keys.json`（一覧から作った ["backup:…", …] の JSON）→ もう一度 list して 0 件を確かめる。namespace ごと消すなら `npx wrangler kv namespace delete --binding BACKUP`（wrangler.jsonc から該当行を外してから deploy）
+- 30 日を待たずに消すのはこの手順だけ。D1 の台帳の消し方は別（解約の手順書）
+
 ## 決まり
 - お客さんの情報（名前・電話・メール）：ネット予約の 3 つは D1 の台帳（blocks）に預かり、**来店日の翌日（日本時間）に自動で空にする**（枠の記録は残る）。見えるのは合言葉つきのお店の画面（/admin・/api/admin/all）だけで、お客さん向けの /api/days には出さない。ログにも出さない。お店の画面からの手入力は名前だけ任意（電話・メールは受け取っても持たない）。合言葉の連続ミス対策で、間違えた接続元の IP を表 auth_fail に持ち、翌日に消す（2026/10/25）
 - 同じ枠を同時に押しても、2つ目は 409（「たった今ほかの方の予約が入りました」）。確かめ方：`curl` で同じ枠を2本並行して POST → 200 と 409 が1つずつ

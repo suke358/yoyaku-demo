@@ -25,7 +25,7 @@ import shopText from '../public/shop.jsonc';
 // ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
 /** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
 /** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[] }} Shop */
-/** @typedef {{ DB: D1Database, ASSETS: Fetcher, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
+/** @typedef {{ DB: D1Database, ASSETS: Fetcher, BACKUP?: KVNamespace, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
 /** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
 /** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string }} Booking */
@@ -462,7 +462,48 @@ function manifest() {
   }), { headers: { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
+// ---- 予約のバックアップ（2026/10/26 決定 09・規約 第13条）----
+// 毎日 04:30（日本時間）に Cron（scheduled）だけが動かす。台帳 blocks・営業時間 hours・設定 settings の全行を JSON にして KV に put。
+// キーは backup:YYYY-MM-DD（日本時間の日付）。1 件ごとに expirationTtl＝30 日（2592000 秒）で、過ぎたら KV が自動で消す。
+// 名前・電話・メールは戻すために含める。book_rate・auth_fail（接続元 IP の記録。10 分／翌日で消すもの）は書き出さない。
+// HTTP の口はない（/api/… からは読めない・書き出せない）。結果は settings の backup_last に残す（成功／失敗と時刻。予約の中身は入れない）→ お店の画面の下に出る
+var BACKUP_TTL_SEC = 30 * 24 * 60 * 60;   // 2592000
+var BACKUP_PREFIX = 'backup:';
+/** @param {D1Database} db @returns {Promise<{ version: number, at: string, date: string, shop: string, counts: { blocks: number, hours: number, settings: number }, blocks: unknown[], hours: unknown[], settings: unknown[] }>} */
+export async function buildBackup(db) {   // テストから直接呼べるように export
+  var now = nowJST();
+  var blocks = (await db.prepare('SELECT id, date, s, e, kind, menu, created_at, name, tel, email, mailng FROM blocks ORDER BY date, s').all()).results;
+  var hours = (await db.prepare('SELECT date, s, e FROM hours ORDER BY date').all()).results;
+  var settings = (await db.prepare('SELECT key, value FROM settings WHERE key <> ?1').bind('backup_last').all()).results;
+  return { version: 1, at: new Date().toISOString(), date: now.date, shop: SHOP.shopName, counts: { blocks: blocks.length, hours: hours.length, settings: settings.length }, blocks: blocks, hours: hours, settings: settings };
+}
+/** @param {Env} env @returns {Promise<{ ok: boolean, key?: string, counts?: { blocks: number, hours: number, settings: number }, error?: string }>} */
+export async function runBackup(env) {   // テストから直接呼べるように export
+  var at = new Date().toISOString();
+  /** @type {{ ok: boolean, at: string, key?: string, counts?: { blocks: number, hours: number, settings: number }, error?: string }} */
+  var result;
+  try {
+    if (!env.BACKUP) throw new Error('KV がつながっていません（wrangler.jsonc の kv_namespaces）');
+    await ensureTables(env.DB);
+    var data = await buildBackup(env.DB);
+    var key = BACKUP_PREFIX + data.date;
+    await env.BACKUP.put(key, JSON.stringify(data), { expirationTtl: BACKUP_TTL_SEC, metadata: { at: at, counts: data.counts } });
+    result = { ok: true, at: at, key: key, counts: data.counts };
+  } catch (/** @type {any} */ e) {
+    // 失敗の理由は短く（予約の中身・個人情報は入れない）
+    result = { ok: false, at: at, error: String(e && e.message || e).slice(0, 120) };
+  }
+  try {
+    await env.DB.prepare('INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('backup_last', JSON.stringify(result)).run();
+  } catch (e) { }
+  return result;
+}
+
 export default {
+  /** @param {ScheduledController} controller @param {Env} env @param {ExecutionContext} ctx */
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runBackup(env));
+  },
   /** @param {Request} request @param {Env} env */
   async fetch(request, env) {
     var url = new URL(request.url);
