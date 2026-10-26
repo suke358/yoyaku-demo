@@ -21,7 +21,7 @@
   ],
   // 予約のバックアップの置き場所（Workers KV。2026/10/26 決定 09）。毎日 1 個の JSON を 30 日で消える設定で置く。id は `wrangler kv namespace create yoyaku-demo-backup` で作った値
   "kv_namespaces": [
-    { "binding": "BACKUP", "id": "00000000000000000000000000000000" }
+    { "binding": "BACKUP", "id": "15fa45aa7969431a95ae6f03a68ad18f" }
   ],
   // 毎日 04:30（日本時間）＝ 19:30 UTC に scheduled（バックアップ）が動く。liftoff-seika の 4:10 と重ねない
   "triggers": { "crons": ["30 19 * * *"] },
