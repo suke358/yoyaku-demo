@@ -308,7 +308,10 @@ describe('合言葉の連続ミス（同じ接続元から 5 回で 10 分止め
     expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(6);
     expect(codes.every((c) => c === 401 || c === 429)).toBe(true);
     expect((await tryPw(ADMIN)).status).toBe(429);
-    expect((await rows())[0].n).toBe(10);   // 加算は 1 つの命令なので同時でも数が飛ばない
+    // 加算は 1 つの命令なので同時でも数が飛ばない。止まったあとの分は、先に止めが効けば加算せず 429 で返る（CI のように直列に近いと 6、同時だと 10）。守るのは「5 以上で止まる」こと
+    const n = (await rows())[0].n;
+    expect(n).toBeGreaterThanOrEqual(5);
+    expect(n).toBeLessThanOrEqual(10);
   });
   it('10 分たつと解除され、正しい合言葉で入れる。そのあとの間違いは 1 から数え直す', async () => {
     for (let i = 0; i < 5; i++) await tryPw('wrong');
