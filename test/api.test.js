@@ -145,7 +145,9 @@ describe('予約停止（お店の画面で入れた時間）', () => {
     const busy = d.busy[FAR];
     expect(busy.some((b) => b.s === '13:00' && b.e === '14:00')).toBe(true);
     expect(busy.every((b) => b.kind === 'busy' && !('menu' in b) && !('id' in b))).toBe(true);
-    expect(JSON.stringify(d)).not.toMatch(/stop|man|net|テスト 太郎|090-0000-0000|test@example.com|name|tel|email/);
+    // menus（メニューの name）と案内文は 2026/10/26 から返すので除いて見る。残り（hours・busy など）に予約の中身や名前の欄がないこと
+    const { menus, otherMenusNote, taxNote, ...rest } = d;
+    expect(JSON.stringify(rest)).not.toMatch(/stop|man|net|テスト 太郎|090-0000-0000|test@example.com|name|tel|email/);
   });
 });
 
@@ -213,8 +215,10 @@ describe('名前・電話・メール（お店の画面用。2026/10/25）', () 
   it('お客さん向けの /api/days には、名前・電話・メールもその欄の名前も絶対に出ない', async () => {
     await setHours(FAR, '10:00', '18:00');
     expect((await book(FAR, '10:00', M_SLOT.name)).status).toBe(200);
-    const text = JSON.stringify(await (await api('/api/days')).json());
+    const { menus, otherMenusNote, taxNote, ...rest } = await (await api('/api/days')).json();   // menus のメニュー名は除いて見る（2026/10/26）
+    const text = JSON.stringify(rest);
     expect(text).not.toMatch(/テスト 太郎|090-0000-0000|test@example\.com|"name"|"tel"|"email"|"menu"|"id"/);
+    expect(JSON.stringify(menus)).not.toMatch(/テスト 太郎|090-0000-0000|test@example\.com|"tel"|"email"|"id"/);
   });
   it('お店の画面の API は合言葉がないと 401（all・block）。間違った合言葉も 401', async () => {
     expect((await api('/api/admin/all')).status).toBe(401);
@@ -356,5 +360,57 @@ describe('テストから本物の GAS に届かない（2026/10/25）', () => {
     const ok = await sendGas({ ...env, GAS_URL: 'https://script.google.com/macros/s/xxxx/exec' }, { token: 'x' });
     expect(ok).toBe(false);
     expect(gasCalls).toHaveLength(0);
+  });
+});
+
+describe('HP から空きを読む（CORS と menus。2026/10/26）', () => {
+  const OK_ORIGIN = (SHOP.allowOrigins || [])[0];
+  const NG_ORIGIN = 'https://evil.example';
+  const days = (origin) => api('/api/days', origin ? { headers: { Origin: origin } } : undefined);
+  it('shop.jsonc の allowOrigins に 1 つ以上ある（このテストの前提）', () => {
+    expect(OK_ORIGIN).toMatch(/^https:\/\//);
+    expect(SHOP.allowOrigins).not.toContain('*');
+  });
+  it('許可した Origin からの /api/days には、その Origin だけの CORS ヘッダと Vary: Origin が付く', async () => {
+    const r = await days(OK_ORIGIN);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect(r.headers.get('vary')).toBe('Origin');
+  });
+  it('許可していない Origin・Origin なしには CORS ヘッダが付かない（* も出ない）', async () => {
+    expect((await days(NG_ORIGIN)).headers.get('access-control-allow-origin')).toBeNull();
+    expect((await days()).headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('/api/book と /api/admin には、許可した Origin でも CORS ヘッダが付かない', async () => {
+    const b = await post('/api/book', {}, { Origin: OK_ORIGIN });
+    expect(b.headers.get('access-control-allow-origin')).toBeNull();
+    const a = await api('/api/admin/all', { headers: { Origin: OK_ORIGIN, 'X-Admin-Password': ADMIN } });
+    expect(a.status).toBe(200);
+    expect(a.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('返事に menus（name・min・price・slot だけ）・otherMenusNote・taxNote があり、設定の秘密（mail・合言葉・allowOrigins）や名前・電話・メールは入らない', async () => {
+    const d = await (await days(OK_ORIGIN)).json();
+    expect(d.menus.length).toBe(SHOP.menus.length);
+    d.menus.forEach((m, i) => {
+      expect(Object.keys(m).sort()).toEqual(['min', 'name', 'price', 'slot']);
+      expect(m.name).toBe(SHOP.menus[i].name);
+      expect(m.min).toBe(+SHOP.menus[i].min);
+      expect(m.slot).toBe(+SHOP.menus[i].slot || 0);
+    });
+    expect(d.otherMenusNote).toBe(SHOP.otherMenusNote || '');
+    expect(d.taxNote).toBe(SHOP.taxNote || '');
+    const text = JSON.stringify(d);
+    for (const k of ['mail', 'demoPassword', 'allowOrigins', 'password', 'token', 'GAS', 'name"', 'tel"', 'email', 'phone', 'address', 'lineUrl', 'cancelPolicy']) {
+      if (k === 'name"') expect(text.split('"name"').length - 1).toBe(SHOP.menus.length);   // "name" はメニューの名前の分だけ
+      else expect(text).not.toContain(k);
+    }
+    if (SHOP.mail) expect(text).not.toContain(SHOP.mail);
+  });
+  it('お店の画面で手入力した予約（LINE・電話）も、/api/days の busy に入る（中身は時間だけ）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await admin('POST', 'block', { date: FAR, s: '13:00', e: '14:00', menu: '電話', name: '山田 花子' })).status).toBe(200);
+    const d = await (await days(OK_ORIGIN)).json();
+    expect(d.busy[FAR]).toEqual([{ s: '13:00', e: '14:00', kind: 'busy' }]);
+    expect(JSON.stringify(d)).not.toContain('山田');
   });
 });

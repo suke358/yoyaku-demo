@@ -8,7 +8,7 @@
 //   GAS の URL と合言葉は秘密の変数 GAS_URL・GAS_TOKEN（本番 wrangler secret put／手元 .dev.vars）
 // デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
 //
-// GET  /api/days                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
+// GET  /api/days（allowOrigins の Origin からは CORS 付き。menus・otherMenusNote・taxNote も返す。2026/10/26）                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
 // POST /api/book {date,start,menu,name,tel,email} 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
@@ -24,7 +24,7 @@ import shopText from '../public/shop.jsonc';
 
 // ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
 /** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
-/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean }} Shop */
+/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[] }} Shop */
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
 /** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
@@ -219,15 +219,27 @@ function mailPreview(c, b, s) {
   return L.join('\n');
 }
 
-/** @param {Env} env */
-async function handleDays(env) {
+// ほかのサイト（お店の HP）から /api/days を読めるようにする許可（CORS）。shop.jsonc の allowOrigins にある Origin のときだけ、その Origin を返す。
+// * は使わない。一覧にない Origin・Origin なしには付けない。/api/book・/api/admin には付けない（HP からの予約確定はしない）
+/** @param {Request} request @returns {Record<string,string>} */
+function corsFor(request) {
+  var origin = request.headers.get('Origin') || '';
+  var list = Array.isArray(SHOP.allowOrigins) ? SHOP.allowOrigins : [];
+  if (origin && list.indexOf(origin) >= 0) return { 'access-control-allow-origin': origin, 'vary': 'Origin' };
+  return {};
+}
+/** @param {Env} env @param {Request} request */
+async function handleDays(env, request) {
   var now = nowJST(), last = lastDate(now.date);
   var hours = (await env.DB.prepare('SELECT date, s, e FROM hours WHERE date >= ?1 AND date <= ?2 ORDER BY date').bind(now.date, last).all()).results;
   var bl = /** @type {{ date: string, s: string, e: string }[]} */ ((await env.DB.prepare('SELECT date, s, e FROM blocks WHERE date >= ?1 AND date <= ?2 ORDER BY date, s').bind(now.date, last).all()).results);
   /** @type {Record<string, { s: string, e: string, kind: string }[]>} */
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
-  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy });
+  // メニュー（名前・施術の分・料金・予約1回の長さ だけ）と案内の 2 文。HP 側のカレンダーが使う。設定のほかの項目（mail・合言葉など）は出さない
+  var menus = SHOP.menus.map(function (m) { return { name: m.name, min: +m.min, price: m.price || '', slot: m.slot ? +m.slot : 0 }; });
+  return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy,
+    menus: menus, otherMenusNote: SHOP.otherMenusNote || '', taxNote: SHOP.taxNote || '' }, 200, corsFor(request));
 }
 
 /** @param {Request} request @param {Env} env */
@@ -372,7 +384,7 @@ export default {
       await ensureTables(env.DB);
       await forgetOld(env.DB, nowJST().date);   // 来店日が過ぎた予約の名前・電話・メールを空にする
       if (DEMO) await demoPrepare(env.DB);
-      if (p === '/api/days' && request.method === 'GET') return await handleDays(env);
+      if (p === '/api/days' && request.method === 'GET') return await handleDays(env, request);
       if (p === '/api/book' && request.method === 'POST') return await handleBook(request, env);
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
