@@ -29,3 +29,8 @@ CREATE TABLE IF NOT EXISTS settings (
 -- お店の人が止まってしまったとき、担当者が今すぐ解除する 1 コマンド（そのお店のフォルダで）：
 --   PATH=/usr/local/bin:$PATH npx -y wrangler@4 d1 execute <database_name> --remote --command "DELETE FROM auth_fail"
 CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until TEXT NOT NULL DEFAULT '', day TEXT NOT NULL);
+
+-- いたずら対策 A（2026/10/26）：/api/book への送信の記録（接続元 IP と時刻）。同じ IP から 10 分に 5 回まで。10 分たった行はアクセスのたびに消す（IP はここにだけ）。
+-- B'（同じ電話・メールの未来のネット予約は 3 件まで）は blocks を数えるだけで表は増えない。デモ（demo:true）では両方とも見ない。
+CREATE TABLE IF NOT EXISTS book_rate (ip TEXT NOT NULL, at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS book_rate_ip ON book_rate(ip);

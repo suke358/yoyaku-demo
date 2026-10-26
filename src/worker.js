@@ -9,7 +9,7 @@
 // デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
 //
 // GET  /api/days（allowOrigins の Origin からは CORS 付き。menus・otherMenusNote・taxNote も返す。2026/10/26）                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
-// POST /api/book {date,start,menu,name,tel,email}（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
+// POST /api/book {date,start,menu,name,tel,email}（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。いたずら対策：同じ IP は 10 分に 5 回・同じ電話／メールの未来の予約は 3 件まで。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
@@ -68,8 +68,15 @@ var SCHEMA = [
   'CREATE INDEX IF NOT EXISTS blocks_date ON blocks(date)',
   'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
   // 合言葉の連続ミス（2026/10/25）：接続元 IP ごとの回数と止める期限。IP はここにだけ持ち、ログにも画面にも出さない。day（日本時間の日付）の翌日に消す
-  "CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until TEXT NOT NULL DEFAULT '', day TEXT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until TEXT NOT NULL DEFAULT '', day TEXT NOT NULL)",
+  // いたずら対策 A（2026/10/26）：/api/book への送信の記録（接続元 IP と時刻）。10 分に 5 回まで。IP はここにだけ持ち、10 分たった行はアクセスのたびに消す
+  'CREATE TABLE IF NOT EXISTS book_rate (ip TEXT NOT NULL, at TEXT NOT NULL)',
+  'CREATE INDEX IF NOT EXISTS book_rate_ip ON book_rate(ip)'
 ];
+var RATE_N = 5, RATE_MIN = 10;   // A：同じ IP から 10 分に 5 回まで
+var FUTURE_N = 3;                // B'：同じ電話・メールの、まだ来店していないネット予約は 3 件まで
+var RATE_MSG = '短い間にたくさん送られました。しばらくしてからお試しください。お急ぎの場合は LINE かお電話でお願いします';
+var FUTURE_MSG = '同じお電話・メールでのネット予約は ' + FUTURE_N + ' 件までです。LINE かお電話でご相談ください';
 var LOCK_N = 5, LOCK_MIN = 10;   // 5 回で 10 分
 var LOCK_MSG = 'しばらくしてからお試しください';
 /** @type {Promise<unknown>|null} */
@@ -102,8 +109,28 @@ function ensureTables(db) {
 export function forgetOld(db, todayKey) {   // テストから直接呼べるように export
   return db.batch([
     db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey),
-    db.prepare('DELETE FROM auth_fail WHERE day < ?1').bind(todayKey)   // 合言葉を間違えた接続元の記録も翌日に消す
+    db.prepare('DELETE FROM auth_fail WHERE day < ?1').bind(todayKey),   // 合言葉を間違えた接続元の記録も翌日に消す
+    db.prepare('DELETE FROM book_rate WHERE at < ?1').bind(new Date(Date.now() - RATE_MIN * 60000).toISOString())   // 送信の記録（IP）は 10 分たったら消す
   ]);
+}
+// いたずら対策（2026/10/26）。入力の確かめを通ったあと、予約を入れる前に見る。デモ（shop.jsonc の demo:true）では見ない
+//  B'：同じ電話（ハイフンを除いて比べる）か同じメール（大文字小文字を区別しない）で、来店日が今日以降のネット予約（kind net）が FUTURE_N 件あれば 429
+//  A ：同じ接続元（IP）から RATE_MIN 分に RATE_N 回まで。超えたら 429。IP が無いとき（手元など）は見ない。予約が入った回も 409 になった回も数える（ここで記録する）
+/** @param {D1Database} db @param {{ demo: boolean, ip: string, tel: string, email: string, today: string }} o @returns {Promise<{ status: number, error: string }|null>} */
+export async function limitCheck(db, o) {   // テストから直接呼べるように export
+  if (o.demo) return null;
+  var telKey = String(o.tel || '').replace(/-/g, ''), mailKey = String(o.email || '').toLowerCase();
+  var fut = /** @type {{ n: number }} */ (await db.prepare(
+    "SELECT count(*) AS n FROM blocks WHERE kind = 'net' AND date >= ?1 AND (replace(tel, '-', '') = ?2 OR lower(email) = ?3)"
+  ).bind(o.today, telKey, mailKey).first());
+  if (fut && fut.n >= FUTURE_N) return { status: 429, error: FUTURE_MSG };
+  if (o.ip) {
+    var since = new Date(Date.now() - RATE_MIN * 60000).toISOString();
+    var r = /** @type {{ n: number }} */ (await db.prepare('SELECT count(*) AS n FROM book_rate WHERE ip = ?1 AND at >= ?2').bind(o.ip, since).first());
+    if (r && r.n >= RATE_N) return { status: 429, error: RATE_MSG };
+    await db.prepare('INSERT INTO book_rate (ip, at) VALUES (?1, ?2)').bind(o.ip, new Date().toISOString()).run();
+  }
+  return null;
 }
 
 /** @param {unknown} body @param {number} [status] @param {Record<string,string>} [extra] @returns {Response} */
@@ -286,6 +313,9 @@ async function handleBook(request, env) {
   if (!h) return json({ error: 'この日は営業していません' }, 400);
   if ((s - m2(h.s)) % STEP_MIN !== 0) return json({ error: '開始時間の形が違います' }, 400);
   if (s < m2(h.s) || e > m2(h.e)) return json({ error: '営業時間の外です' }, 400);
+  // いたずら対策（入力の確かめを全部通ったあと。デモでは見ない）
+  var lim = await limitCheck(env.DB, { demo: DEMO, ip: request.headers.get('CF-Connecting-IP') || '', tel: tel, email: email, today: now.date });
+  if (lim) return json({ error: lim.error }, lim.status);
   var id = newId();
   var ok = await insertBlock(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString(), name: name, tel: tel, email: email });   // 名前・電話・メールはお店の画面用（翌日に空にする）
   if (!ok) return json({ error: 'たった今ほかの方の予約が入りました' }, 409);

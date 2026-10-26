@@ -4,7 +4,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
-import { forgetOld, migrate, sendGas } from '../src/worker.js';
+import { forgetOld, migrate, sendGas, limitCheck } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -52,7 +52,7 @@ beforeEach(async () => {
   vi.setSystemTime(new Date(NOW_UTC));
   // テストごとに D1 をまっさらに（前のテストの予約・営業時間を持ちこさない）。表は最初の /api/days で作られる
   await api('/api/days');
-  await env.DB.batch([env.DB.prepare('DELETE FROM blocks'), env.DB.prepare('DELETE FROM hours'), env.DB.prepare('DELETE FROM auth_fail')]);
+  await env.DB.batch([env.DB.prepare('DELETE FROM blocks'), env.DB.prepare('DELETE FROM hours'), env.DB.prepare('DELETE FROM auth_fail'), env.DB.prepare('DELETE FROM book_rate')]);
 });
 
 describe('時計', () => {
@@ -474,5 +474,70 @@ describe('HP から予約を送る（/api/book の CORS と事前確認。2026/1
     expect(o.status).not.toBe(204);
     expect(o.headers.get('access-control-allow-origin')).toBeNull();
     expect(o.headers.get('access-control-allow-methods')).toBeNull();
+  });
+});
+
+describe('いたずら対策（A：同じ IP は 10 分に 5 回・B\'：同じ電話／メールの未来の予約は 3 件。2026/10/26）', () => {
+  const OK_ORIGIN = (SHOP.allowOrigins || [])[0];
+  const IS_DEMO = SHOP.demo === true;
+  const IP1 = '203.0.113.10', IP2 = '198.51.100.20';
+  const chk = (o) => limitCheck(env.DB, { demo: false, ip: '', tel: '', email: '', today: TODAY, ...o });
+  const bookIp = (ip, extra, origin) => post('/api/book', { date: FAR, start: '10:00', menu: M_SLOT.name, name: 'テスト', tel: '090-0000-0000', email: 'test@example.com', ...(extra || {}) }, { 'CF-Connecting-IP': ip, ...(origin ? { Origin: origin } : {}) });
+  it('A：同じ IP は 5 回まで。6 回目は 429。別の IP は通る。IP が無いときは数えない', async () => {
+    for (let i = 0; i < 5; i++) expect(await chk({ ip: IP1 })).toBeNull();
+    expect(await chk({ ip: IP1 })).toMatchObject({ status: 429, error: expect.stringMatching(/しばらく/) });
+    expect(await chk({ ip: IP2 })).toBeNull();
+    for (let i = 0; i < 8; i++) expect(await chk({ ip: '' })).toBeNull();
+    expect((await env.DB.prepare('SELECT count(*) AS n FROM book_rate').first()).n).toBe(6);   // IP なしの分は記録しない
+  });
+  it('A：10 分たつと戻る。古い記録はアクセスのたびに消える（IP を残さない）', async () => {
+    for (let i = 0; i < 5; i++) await chk({ ip: IP1 });
+    expect(await chk({ ip: IP1 })).toMatchObject({ status: 429 });
+    vi.setSystemTime(new Date(new Date(NOW_UTC).getTime() + 10 * 60000 + 1000));
+    expect(await chk({ ip: IP1 })).toBeNull();
+    await forgetOld(env.DB, TODAY);
+    expect((await env.DB.prepare('SELECT count(*) AS n FROM book_rate').first()).n).toBe(1);   // 10 分より前の 5 件は消え、いまの 1 件だけ
+  });
+  it('B\'：同じ電話（ハイフン違い）・同じメール（大文字小文字違い）の未来のネット予約が 3 件あれば 429。別の電話は通る。手入力・過ぎた予約は数えない', async () => {
+    await setHours(FAR, '10:00', '18:00'); await setHours(FAR2, '10:00', '18:00');
+    // ネット予約を 3 件（SELF から。デモでないときは B' も通る＝3 件目までは入る）
+    expect((await book(FAR, '10:00', M_PLAIN.name, { tel: '090-1234-5678', email: 'Hana@Example.com' })).status).toBe(200);
+    expect((await book(FAR, '14:00', M_PLAIN.name, { tel: '09012345678', email: 'other1@example.com' })).status).toBe(200);
+    expect((await book(FAR2, '10:00', M_PLAIN.name, { tel: '080-0000-0000', email: 'hana@example.com' })).status).toBe(200);
+    // 手入力（kind man）と、過ぎた日のネット予約は数えない
+    expect((await admin('POST', 'block', { date: FAR2, s: '14:00', e: '15:00', menu: '電話', name: '花子' })).status).toBe(200);
+    await env.DB.prepare("INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) VALUES ('old1', '2027-03-01', '10:00', '11:00', 'net', 'x', '', '花子', '090-1234-5678', 'hana@example.com')").run();
+    // 電話はハイフンなし・メールは大文字で照合 → 3 件（#1 電話・#2 電話・#3 メール）に当たる
+    expect(await chk({ tel: '09012345678', email: 'HANA@EXAMPLE.COM' })).toMatchObject({ status: 429, error: expect.stringMatching(/3 件まで/) });
+    // 電話だけ同じ（メールは別）なら 2 件（#1・#2）なので通る。別の電話・メールも通る
+    expect(await chk({ tel: '090-1234-5678', email: 'nobody@example.com' })).toBeNull();
+    expect(await chk({ tel: '070-0000-0000', email: 'nobody@example.com' })).toBeNull();
+  });
+  it.skipIf(IS_DEMO)('本番の作り：同じ IP の 6 回目は 429 で CORS 付き。400 の入力は数えない。同じ電話の 4 件目は 429', async () => {
+    await setHours(FAR, '10:00', '18:00'); await setHours(FAR2, '10:00', '18:00');
+    for (let i = 0; i < 3; i++) expect((await bookIp(IP1, { start: '09:00' })).status).toBe(400);   // 営業時間の外＝入力の確かめで落ちる。数えない
+    const starts = ['10:00', '11:00', '12:00', '13:00', '14:00'];
+    for (let i = 0; i < 5; i++) {
+      const r = await bookIp(IP1, { start: starts[i], email: 'ip' + i + '@example.com', tel: '090-1111-000' + i }, OK_ORIGIN);
+      expect([200, 409]).toContain(r.status);
+    }
+    const six = await bookIp(IP1, { start: '15:00', email: 'ip6@example.com', tel: '090-1111-0006' }, OK_ORIGIN);
+    expect(six.status).toBe(429);
+    expect(six.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect((await six.json()).error).toMatch(/しばらく/);
+    // 同じ電話で 4 件目（別の IP から）
+    expect((await bookIp(IP2, { date: FAR2, start: '10:00', tel: '090-2222-0000', email: 'a@example.com' })).status).toBe(200);
+    expect((await bookIp(IP2, { date: FAR2, start: '12:00', tel: '09022220000', email: 'b@example.com' })).status).toBe(200);
+    expect((await bookIp(IP2, { date: FAR2, start: '14:00', tel: '090-2222-0000', email: 'c@example.com' })).status).toBe(200);
+    const four = await bookIp(IP2, { date: FAR2, start: '16:00', tel: '090-2222-0000', email: 'd@example.com' }, OK_ORIGIN);
+    expect(four.status).toBe(429);
+    expect(four.headers.get('access-control-allow-origin')).toBe(OK_ORIGIN);
+    expect((await four.json()).error).toMatch(/3 件まで/);
+  });
+  it.skipIf(!IS_DEMO)('デモでは制限が働かない（同じ IP から 6 回でも 429 にならない）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const starts = ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00'];
+    for (let i = 0; i < 6; i++) expect([200, 409]).toContain((await bookIp(IP1, { start: starts[i] })).status);
+    expect((await env.DB.prepare('SELECT count(*) AS n FROM book_rate').first()).n).toBe(0);
   });
 });
