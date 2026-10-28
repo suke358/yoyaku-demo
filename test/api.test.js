@@ -4,7 +4,7 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import shopText from '../public/shop.jsonc?raw';
-import { forgetOld, migrate, sendGas, limitCheck, insertNet } from '../src/worker.js';
+import { forgetOld, migrate, sendGas, limitCheck, insertNet, priceOf } from '../src/worker.js';
 
 const SHOP = JSON.parse(shopText.replace(/^\s*\/\/.*$/gm, '').replace(/[ \t]+\/\/[^"\n]*$/gm, ''));
 const PRE = +SHOP.preMin || 0, BUF = +SHOP.bufferMin || 0, STEP = +SHOP.stepMin || 30;
@@ -734,8 +734,20 @@ describe('複数メニュー（menus＝名前の配列。2026/10/28）', () => {
     await setHours(FAR, '10:00', '18:00');
     const r = await (await bookM(FAR, '10:00', [M_PLAIN.name, M_ASK.name])).json();
     expect(r.ok).toBe(true);
-    expect(r.price).toBe(M_ASK.price);
+    expect(r.price).toBe('お問い合わせください');
     expect(/円/.test(r.price)).toBe(false);
+    if (IS_DEMO) { expect(r.mailPreview).toContain('■ 料金　　お問い合わせください'); expect(r.mailPreview).not.toContain('合計 お問い合わせ'); }   // 「合計 お問い合わせください」にしない（レビュー 10/28）
+  });
+  it('料金の形（レビュー 10/28）：「5,500円〜」が混ざれば足して「〜」付き。金額でない文は、その文ではなく固定の「お問い合わせください」。shop.jsonc の price は決まった形だけ', () => {
+    const m = (price) => ({ name: 'x', min: 10, price });
+    expect(priceOf([m('5,500円'), m('3,300円')])).toBe('8,800円');
+    expect(priceOf([m('5,500円〜'), m('3,300円')])).toBe('8,800円〜');
+    expect(priceOf([m('5500円'), m('5,500 円')])).toBe('11,000円');
+    expect(priceOf([m('5,500円'), m('時価')])).toBe('お問い合わせください');
+    expect(priceOf([m('5,500円'), m('')])).toBe('お問い合わせください');
+    expect(priceOf([m('999,999円'), m('1円')])).toBe('1,000,000円');
+    expect(priceOf([m('5,500円（税込）')])).toBe('5,500円（税込）');   // 1 つのときはそのまま
+    for (const x of SHOP.menus) expect(x.price === 'お問い合わせください' || /^[0-9,]+\s*円(〜)?$/.test(x.price)).toBe(true);   // 設定の形を縛る（他のお店に写したとき二度目を止める）
   });
   it('メール：お客さん宛・お店宛の元（GAS へ渡す booking）に全メニューが 1 つずつ・施術の合計・所要時間・合計の料金が入る。デモは見本の文に同じ内容', async () => {
     await setHours(FAR, '10:00', '18:00');

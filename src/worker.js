@@ -62,13 +62,15 @@ function lenOf(ms) { if (ms.length === 1) return slotOf(ms[0]); var t = 0; ms.fo
 function minOf(ms) { var t = 0; ms.forEach(function (m) { t += +m.min; }); return t; }
 /** @param {number} n @returns {string} 3 けたごとに , */
 function yen(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '円'; }
-// 料金の目安：「5,500円」の形を足して「8,800円」。1 つでも金額でないもの（お問い合わせください など）があれば、その文をそのまま返す（合計は出さない）。割引はなし
+// 料金の目安：「5,500円」の形を足して「8,800円」。「5,500円〜」が混ざれば「8,800円〜」。1 つでも金額でないもの（お問い合わせください など）があれば、固定の ASK_PRICE（その文を合計として出さない。レビュー 10/28）。割引はなし
+var ASK_PRICE = 'お問い合わせください';
+var PRICE_RE = /^([0-9,]+)\s*円(〜)?$/;   // shop.jsonc の price に書いてよい金額の形（テストが全メニューを確かめる）
 /** @param {ShopMenu[]} ms @returns {string} */
-function priceOf(ms) {
+export function priceOf(ms) {   // テストから直接呼べるように export
   if (ms.length === 1) return ms[0].price || '';
-  var sum = 0, ask = '';
-  ms.forEach(function (m) { var p = String(m.price || ''), x = /^([0-9,]+)円$/.exec(p); if (x) sum += +x[1].replace(/,/g, ''); else if (!ask) ask = p || 'お問い合わせください'; });
-  return ask || yen(sum);
+  var sum = 0, from = false, ask = false;
+  ms.forEach(function (m) { var x = PRICE_RE.exec(String(m.price || '')); if (x) { sum += +x[1].replace(/,/g, ''); if (x[2]) from = true; } else ask = true; });
+  return ask ? ASK_PRICE : yen(sum) + (from ? '〜' : '');
 }
 /** 名前をつないで台帳・メールに書く形に（例「よもぎ蒸し＋ボディケア 30分」） @param {ShopMenu[]} ms @returns {string} */
 function namesOf(ms) { return ms.map(function (m) { return String(m.name); }).join('＋'); }
@@ -316,7 +318,7 @@ function mailPreview(c, b, s) {
   if (many) { L.push('■ メニュー'); b.items.forEach(function (it) { L.push('　・' + it.name + '（' + it.min + '分' + (it.price ? '・' + it.price : '') + '）'); }); L.push('■ 施術時間　合計' + b.min + '分'); }
   else L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
-  if (b.price) L.push('■ 料金　　' + (many ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));
+  if (b.price) L.push('■ 料金　　' + (many && /円/.test(b.price) ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 金額でないときは「合計」を付けない
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
   L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));

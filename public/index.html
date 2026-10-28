@@ -156,13 +156,13 @@ function selMenus(){return menuSel.map(function(i){return SHOP.menus[i]})}
 function lenOf(ms){if(ms.length==1)return slotOf(ms[0]);var t=0;ms.forEach(function(m){t+=+m.min});return (+SHOP.preMin||0)+t+(+SHOP.bufferMin||0)}
 function minOf(ms){var t=0;ms.forEach(function(m){t+=+m.min});return t}
 function yen(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,",")+"円"}
-function priceOf(ms){if(ms.length==1)return ms[0].price||"";var sum=0,ask="";ms.forEach(function(m){var p=String(m.price||""),x=/^([0-9,]+)円$/.exec(p);if(x)sum+=+x[1].replace(/,/g,"");else if(!ask)ask=p||"お問い合わせください"});return ask||yen(sum)}
+function priceOf(ms){if(ms.length==1)return ms[0].price||"";var sum=0,from=false,ask=false;ms.forEach(function(m){var x=/^([0-9,]+)\s*円(〜)?$/.exec(String(m.price||""));if(x){sum+=+x[1].replace(/,/g,"");if(x[2])from=true}else ask=true});return ask?"お問い合わせください":yen(sum)+(from?"〜":"")}
 function namesOf(ms){return ms.map(function(m){return m.name}).join("＋")}
 /* 選んだメニューのまとめの文（施術の合計・所要時間・料金の目安） */
 function sumHtml(ms){
   var len=lenOf(ms),mn=minOf(ms),pr=priceOf(ms),many=ms.length>1;
   var h="<b>"+esc(namesOf(ms))+"</b><br>施術 "+(many?"合計":"")+mn+"分"+(len!=mn?"・所要 約"+len+"分（カウンセリング・お片づけを含む）":"");
-  if(pr)h+="<br>"+(many?"料金の目安　合計 ":"")+esc(pr)+(/円/.test(pr)?"（税込）":"");
+  if(pr)h+="<br>"+(many?"料金の目安　"+(/円/.test(pr)?"合計 ":""):"")+esc(pr)+(/円/.test(pr)?"（税込）":"");
   return h;
 }
 /* 空いている開始時間：来店〜（予約1回の長さ）が営業時間に入り、埋まっている時間（予約・予約停止）と重ならない。今日は、今＋締切より前の時間は出さない */

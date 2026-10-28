@@ -66,7 +66,7 @@ function customerBody(c, b, s) {
     L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
   }
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
-  if (b.price) L.push('■ 料金　　' + (many ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 「お問い合わせください」のときは（税込）を付けない
+  if (b.price) L.push('■ 料金　　' + (many && /円/.test(b.price) ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 「お問い合わせください」のときは「合計」も（税込）も付けない
   L.push('');
   L.push('■ キャンセルについて');
   L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
@@ -98,7 +98,7 @@ function shopBody(c, b) {
   if (b.items && b.items.length > 1) {   // 複数メニュー：1 つずつ＋合計（2026/10/28）
     L.push('メニュー　' + b.items.length + 'つ（施術 合計' + b.min + '分・所要 約' + b.slot + '分）');
     for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + '（' + b.items[i].min + '分' + (b.items[i].price ? '・' + b.items[i].price : '') + '）');
-    if (b.price) L.push('　合計 ' + b.price);
+    if (b.price) L.push('　' + (/円/.test(b.price) ? '合計 ' : '') + b.price);
   } else {
     L.push('メニュー　' + b.menu + '（' + b.min + '分）' + (b.price ? '　' + b.price : ''));
   }
