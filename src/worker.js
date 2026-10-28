@@ -9,7 +9,7 @@
 // デモ（shop.jsonc の demo: true）：GAS を呼ばず、確認メールの見本の文を返す（画面に出す）。秘密の変数がなくても予約を受け付ける
 //
 // GET  /api/days（allowOrigins の Origin からは CORS 付き。menus・otherMenusNote・taxNote も返す。2026/10/26）                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
-// POST /api/book {date,start,menu,name,tel,email}（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。いたずら対策：同じ IP は 10 分に 5 回・同じ電話／メールの未来の予約は 3 件まで。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
+// POST /api/book {date,start,menu か menus,name,tel,email}（menus＝複数メニュー（名前の配列）。1 つなら今までどおり slot、2 つ以上なら 前＋施術の合計＋後。料金は合計、1 つでも金額でなければその文。2026/10/28）（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。いたずら対策：同じ IP は 10 分に 5 回・同じ電話／メールの未来の予約は 3 件まで。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
 //   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
@@ -28,7 +28,8 @@ import shopText from '../public/shop.jsonc';
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, BACKUP?: KVNamespace, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
 /** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
-/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string }} Booking */
+/** @typedef {{ name: string, min: number, price: string }} BookItem */
+/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string, items: BookItem[] }} Booking */
 /** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
 
 // shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す。注釈に引用符は書けない）
@@ -53,6 +54,48 @@ function lastDate(today) { return DAYS_AHEAD > 0 ? addDays(today, DAYS_AHEAD) : 
 function menuOf(name) { /** @type {ShopMenu|null} */ var m = null; (SHOP.menus || []).forEach(function (x) { if (x.name === name) m = x; }); return m; }
 /** @param {ShopMenu} m @returns {number} */
 function slotOf(m) { return +(/** @type {number} */ (m.slot)) || (PRE_MIN + (+m.min) + BUFFER_MIN); }
+// 複数メニュー（2026/10/28）：選んだメニューの組を 1 つの予約にする。禁止の組み合わせ・上限はなし（同じメニューを 2 回は不可）
+// 長さ＝1 つなら slotOf（メニューの slot が効く）、2 つ以上なら 前＋施術の合計＋後（slot は使わない。準備と片づけは 1 回分）。画面（index.html の lenOf）も同じ計算
+/** @param {ShopMenu[]} ms @returns {number} */
+function lenOf(ms) { if (ms.length === 1) return slotOf(ms[0]); var t = 0; ms.forEach(function (m) { t += +m.min; }); return PRE_MIN + t + BUFFER_MIN; }
+/** 施術の分の合計 @param {ShopMenu[]} ms @returns {number} */
+function minOf(ms) { var t = 0; ms.forEach(function (m) { t += +m.min; }); return t; }
+/** @param {number} n @returns {string} 3 けたごとに , */
+function yen(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '円'; }
+// 料金の目安：「5,500円」の形を足して「8,800円」。1 つでも金額でないもの（お問い合わせください など）があれば、その文をそのまま返す（合計は出さない）。割引はなし
+/** @param {ShopMenu[]} ms @returns {string} */
+function priceOf(ms) {
+  if (ms.length === 1) return ms[0].price || '';
+  var sum = 0, ask = '';
+  ms.forEach(function (m) { var p = String(m.price || ''), x = /^([0-9,]+)円$/.exec(p); if (x) sum += +x[1].replace(/,/g, ''); else if (!ask) ask = p || 'お問い合わせください'; });
+  return ask || yen(sum);
+}
+/** 名前をつないで台帳・メールに書く形に（例「よもぎ蒸し＋ボディケア 30分」） @param {ShopMenu[]} ms @returns {string} */
+function namesOf(ms) { return ms.map(function (m) { return String(m.name); }).join('＋'); }
+// 送られたメニューを設定から引く：menus（名前の配列。2026/10/28）があればそれ、なければ menu（1 つ）。配列は 1 つ以上・全部が設定にある名前・同じ名前は 2 回入れない
+/** @param {any} b @returns {{ menus: ShopMenu[] }|{ error: string }} */
+function pickMenus(b) {
+  /** @type {unknown[]} */
+  var names;
+  if (b.menus !== undefined && b.menus !== null) {
+    if (!Array.isArray(b.menus)) return { error: '入力の形が違います' };
+    if (!b.menus.length) return { error: 'メニューを選んでください' };
+    if (b.menus.length > (SHOP.menus || []).length) return { error: 'メニューが多すぎます' };
+    for (var i = 0; i < b.menus.length; i++) if (typeof b.menus[i] !== 'string') return { error: '入力の形が違います' };
+    names = b.menus;
+  } else names = [b.menu];
+  /** @type {ShopMenu[]} */
+  var out = [];
+  /** @type {Record<string, boolean>} */
+  var seen = {};
+  for (var j = 0; j < names.length; j++) {
+    var m = menuOf(String(names[j]));
+    if (!m) return { error: 'メニューを選んでください' };
+    if (seen[m.name]) return { error: '同じメニューが 2 回入っています' };
+    seen[m.name] = true; out.push(m);
+  }
+  return { menus: out };
+}
 
 // 予約を受け付けられるか：デモは常に。本番は GAS の秘密の変数とお店のメールがそろっているとき
 /** @param {Env} env @returns {boolean} */
@@ -269,9 +312,11 @@ function mailPreview(c, b, s) {
   L.push(c.name + ' 様');
   L.push('このたびは ' + s.name + ' にご予約いただき、ありがとうございます。以下の内容でご予約を承りました。');
   L.push('■ 日時　　' + b.when);
-  L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
+  var many = b.items && b.items.length > 1;   // 複数メニュー：1 行ずつ＋施術の合計（gas/Code.gs の customerBody と同じ形）
+  if (many) { L.push('■ メニュー'); b.items.forEach(function (it) { L.push('　・' + it.name + '（' + it.min + '分' + (it.price ? '・' + it.price : '') + '）'); }); L.push('■ 施術時間　合計' + b.min + '分'); }
+  else L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
-  if (b.price) L.push('■ 料金　　' + b.price + (/円/.test(b.price) ? '（税込）' : ''));
+  if (b.price) L.push('■ 料金　　' + (many ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
   L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));
@@ -332,9 +377,10 @@ async function handleBook(request, env) {
   var fields = ['date', 'start', 'menu', 'name', 'tel', 'email'];
   for (var fi = 0; fi < fields.length; fi++) { var fv = b[fields[fi]]; if (fv !== undefined && fv !== null && typeof fv !== 'string') return json({ error: '入力の形が違います' }, 400); }
   if (!isDate(b.date) || !isTime(b.start)) return json({ error: '入力が足りません' }, 400);
-  var menu = menuOf(b.menu);
-  if (!menu) return json({ error: 'メニューを選んでください' }, 400);
-  var slot = slotOf(menu);   // 枠をふさぐ長さ（前の時間＋施術＋後の時間、か メニューの slot）
+  var pm = pickMenus(b);
+  if ('error' in pm) return json({ error: pm.error }, 400);
+  var menus = pm.menus, menuName = namesOf(menus);
+  var slot = lenOf(menus);   // 枠をふさぐ長さ（1 つ：メニューの slot か 前＋施術＋後。2 つ以上：前＋施術の合計＋後）
   // 名前・電話・メール（GAS へ渡し、お店の画面用に台帳へ。来店日の翌日に空にする）
   var name = String(b.name || '').trim().slice(0, 40), tel = String(b.tel || '').trim(), email = String(b.email || '').trim();
   if (!name) return json({ error: 'お名前を入れてください' }, 400);
@@ -355,23 +401,25 @@ async function handleBook(request, env) {
   var lim = await limitCheck(env.DB, { demo: DEMO, ip: request.headers.get('CF-Connecting-IP') || '', tel: tel, email: email, today: now.date });
   if (lim) return json({ error: lim.error }, lim.status);
   var id = newId();
-  var ins = await insertNet(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: String(menu.name).slice(0, 40), created_at: new Date().toISOString(), name: name, tel: tel, email: email }, { demo: DEMO, today: now.date });   // 名前・電話・メールはお店の画面用（翌日に空にする）
+  var ins = await insertNet(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: menuName.slice(0, 200), created_at: new Date().toISOString(), name: name, tel: tel, email: email }, { demo: DEMO, today: now.date });   // 名前・電話・メールはお店の画面用（翌日に空にする）
   if (ins) return json({ error: ins.error || 'たった今ほかの方の予約が入りました' }, ins.status);
 
   // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
-  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menu.name, min: +menu.min, slot: slot, price: menu.price || '' };
+  // 複数メニューのときは menu が「A＋B」、min が施術の合計、price が合計（か「お問い合わせください」）、items に 1 つずつ（メールで 1 行ずつ書く）
+  var items = menus.map(function (m) { return { name: String(m.name), min: +m.min, price: m.price || '' }; });
+  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menuName, min: minOf(menus), slot: slot, price: priceOf(menus), items: items };
   var shop = shopInfo();
   if (DEMO) {
     // デモ：メールは送らない。見本の文を返して画面に出す
-    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, demo: true, mailPreview: mailPreview(cust, booking, shop) });
+    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, menus: items.map(function (x) { return x.name; }), min: booking.min, price: booking.price, demo: true, mailPreview: mailPreview(cust, booking, shop) });
   }
   // 本番：枠を押さえたあとにメールを送る。送れなくても予約は残す（2026/10/26 決定。メールだけ送られて枠が消える事故を防ぐ）。台帳に「メール未送」の印（mailng）を付け、お店の画面で分かるようにする。返事は 200 で mail:false
   var sent = await sendGas(env, { token: env.GAS_TOKEN, customer: cust, booking: booking, shop: shop });
   if (!sent) {
     await env.DB.prepare('UPDATE blocks SET mailng = 1 WHERE id = ?1').bind(id).run();
-    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, mail: false, note: MAIL_NG_NOTE });
+    return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, menus: items.map(function (x) { return x.name; }), min: booking.min, price: booking.price, mail: false, note: MAIL_NG_NOTE });
   }
-  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, mail: true });
+  return json({ ok: true, id: id, date: b.date, s: t2(s), e: t2(e), slot: slot, menus: items.map(function (x) { return x.name; }), min: booking.min, price: booking.price, mail: true });
 }
 
 /** @param {Request} request @param {Env} env @param {string} path */

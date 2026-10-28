@@ -56,9 +56,17 @@ function customerBody(c, b, s) {
   L.push('以下の内容でご予約を承りました。');
   L.push('');
   L.push('■ 日時　　' + b.when);
-  L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
+  // 複数メニュー（2026/10/28）：items に 1 つずつ入ってくる。1 行ずつ書き、施術の合計と所要時間（前後の時間込み）を添える。worker.js の mailPreview（デモの見本）と同じ形
+  var many = b.items && b.items.length > 1;
+  if (many) {
+    L.push('■ メニュー');
+    for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + '（' + b.items[i].min + '分' + (b.items[i].price ? '・' + b.items[i].price : '') + '）');
+    L.push('■ 施術時間　合計' + b.min + '分');
+  } else {
+    L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
+  }
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
-  if (b.price) L.push('■ 料金　　' + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 「お問い合わせください」のときは（税込）を付けない
+  if (b.price) L.push('■ 料金　　' + (many ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 「お問い合わせください」のときは（税込）を付けない
   L.push('');
   L.push('■ キャンセルについて');
   L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
@@ -87,7 +95,13 @@ function shopBody(c, b) {
   L.push('電話　　　' + c.tel);
   L.push('メール　　' + c.email);
   L.push('日時　　　' + b.when);
-  L.push('メニュー　' + b.menu + '（' + b.min + '分）' + (b.price ? '　' + b.price : ''));
+  if (b.items && b.items.length > 1) {   // 複数メニュー：1 つずつ＋合計（2026/10/28）
+    L.push('メニュー　' + b.items.length + 'つ（施術 合計' + b.min + '分・所要 約' + b.slot + '分）');
+    for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + '（' + b.items[i].min + '分' + (b.items[i].price ? '・' + b.items[i].price : '') + '）');
+    if (b.price) L.push('　合計 ' + b.price);
+  } else {
+    L.push('メニュー　' + b.menu + '（' + b.min + '分）' + (b.price ? '　' + b.price : ''));
+  }
   if (b.id) L.push('予約の番号　' + b.id);
   L.push('');
   L.push('お客さんには確認メールを送ってあります。予約の取り消しはお店の画面（/admin）から。');

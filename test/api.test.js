@@ -648,3 +648,131 @@ describe('別の目のレビューの直し（2026/10/26）', () => {
     expect(JSON.stringify(await (await api('/api/days')).json())).not.toMatch(/mailng|テスト 太郎/);
   });
 });
+
+describe('複数メニュー（menus＝名前の配列。2026/10/28）', () => {
+  const IS_DEMO = SHOP.demo === true;
+  const bookM = (date, start, names, extra) => post('/api/book', { date, start, menus: names, name: 'テスト 太郎', tel: '090-0000-0000', email: 'test@example.com', ...(extra || {}) });
+  // 金額のメニュー 2 つ（slot のあるものと ないもの）と、金額でない（お問い合わせください）メニュー
+  const M_ASK = SHOP.menus.find((m) => !/円$/.test(m.price || ''));
+  const yenOf = (m) => +String(m.price).replace(/[^0-9]/g, '');
+  const yen = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '円';
+  const PAIR = [M_SLOT.name, M_PLAIN.name];
+  const PAIR_LEN = PRE + +M_SLOT.min + +M_PLAIN.min + BUF;   // 2 つ以上は slot を使わず 前＋施術の合計＋後
+  it('このテストの前提：金額のメニューが 2 つ以上、金額でないメニューが 1 つ以上ある', () => {
+    expect(/円$/.test(M_SLOT.price)).toBe(true); expect(/円$/.test(M_PLAIN.price)).toBe(true); expect(M_ASK).toBeTruthy();
+  });
+  it('2 つ選ぶと、枠は 前＋施術の合計＋後（slot は使わない）。返事に menus・施術の合計・合計の料金', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', PAIR)).json();
+    expect(r.ok).toBe(true);
+    expect(r.slot).toBe(PAIR_LEN);
+    expect(r.e).toBe(t2(m2('10:00') + PAIR_LEN));
+    expect(r.menus).toEqual(PAIR);
+    expect(r.min).toBe(+M_SLOT.min + +M_PLAIN.min);
+    expect(r.price).toBe(yen(yenOf(M_SLOT) + yenOf(M_PLAIN)));
+    expect(PAIR_LEN).not.toBe(+M_SLOT.slot + PRE + +M_PLAIN.min + BUF);   // slot を足していない（例：10＋40＋60＋10＝120）
+    const bl = await blocksOf(FAR);
+    expect(bl).toHaveLength(1);
+    expect(bl[0].e).toBe(r.e);
+    expect(bl[0].menu).toBe(M_SLOT.name + '＋' + M_PLAIN.name);   // お店の画面の一覧には 2 つの名前が出る
+  });
+  it('menus に 1 つだけなら今までどおり（slot のあるメニューは slot が効く）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', [M_SLOT.name])).json();
+    expect(r.ok).toBe(true);
+    expect(r.slot).toBe(+M_SLOT.slot);
+    expect(r.e).toBe(t2(m2('10:00') + +M_SLOT.slot));
+    expect(r.price).toBe(M_SLOT.price);
+    expect(r.menus).toEqual([M_SLOT.name]);
+  });
+  it('menu（1 つ・前の形）も今までどおり通る。menu と menus の両方があれば menus を使う', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r1 = await (await book(FAR, '10:00', M_PLAIN.name)).json();
+    expect(r1.ok).toBe(true); expect(r1.slot).toBe(slotOf(M_PLAIN)); expect(r1.menus).toEqual([M_PLAIN.name]);
+    await setHours(FAR2, '10:00', '18:00');
+    const r2 = await (await book(FAR2, '10:00', M_PLAIN.name, { menus: PAIR })).json();
+    expect(r2.ok).toBe(true); expect(r2.slot).toBe(PAIR_LEN); expect(r2.menus).toEqual(PAIR);
+  });
+  it('合計が営業時間の終わりを越える開始時間は 400、収まる開始時間は 200（1 つなら入る時間でも、2 つでは入らない）', async () => {
+    const end = m2('10:00') + PAIR_LEN;   // 2 つの合計がちょうど収まる終わり
+    await setHours(FAR, '10:00', t2(end - STEP));   // 終わりを 1 きざみ早く → 2 つでは収まらない
+    expect((await bookM(FAR, '10:00', PAIR)).status).toBe(400);
+    expect((await bookM(FAR, '10:00', [M_SLOT.name])).status).toBe(200);   // 1 つなら入る
+    await setHours(FAR2, '10:00', t2(end));          // ちょうど収まる
+    expect((await bookM(FAR2, '10:00', PAIR)).status).toBe(200);
+    expect(await blocksOf(FAR)).toHaveLength(1);
+  });
+  it('二重予約：複数メニューの長い枠の中の時間は 409。順でも同時でも枠は 1 つだけ', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await bookM(FAR, '10:00', PAIR)).status).toBe(200);          // 10:00〜（PAIR_LEN 分）
+    const end = m2('10:00') + PAIR_LEN;
+    const inside = t2(Math.floor((end - 1) / STEP) * STEP);              // 枠の終わりの直前のきざみ → 重なる
+    const after = t2(Math.ceil(end / STEP) * STEP);                      // 次のきざみ → 空いている
+    expect((await book(FAR, inside, M_PLAIN.name)).status).toBe(409);
+    expect((await bookM(FAR, inside, PAIR)).status).toBe(409);
+    expect((await book(FAR, after, M_PLAIN.name)).status).toBe(200);
+    // 同時に 2 件（別の日）：200 と 409 が 1 つずつ
+    await setHours(FAR2, '10:00', '18:00');
+    const rs = await Promise.all([bookM(FAR2, '10:00', PAIR, { tel: '090-1111-1111', email: 'a@example.com' }), bookM(FAR2, '10:30', PAIR, { tel: '090-2222-2222', email: 'b@example.com' })]);
+    expect(rs.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(await blocksOf(FAR2)).toHaveLength(1);
+  });
+  it('入力の確かめ：空の配列・存在しない名前・同じ名前 2 回・文字でない要素・配列でない menus・menu も menus もない は 400 で枠を取らない', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const bad = [[], ['ないメニュー'], [M_PLAIN.name, M_PLAIN.name], [M_PLAIN.name, 123], [null], 'もじ', { a: 1 }];
+    for (const v of bad) expect((await bookM(FAR, '10:00', v)).status).toBe(400);
+    expect((await post('/api/book', { date: FAR, start: '10:00', name: 'テスト 太郎', tel: '090-0000-0000', email: 'test@example.com' })).status).toBe(400);
+    expect((await bookM(FAR, '10:00', SHOP.menus.map((m) => m.name).concat([M_PLAIN.name]))).status).toBe(400);   // 設定の数より多い
+    expect(await blocksOf(FAR)).toHaveLength(0);
+    // 設定にある全部を 1 回ずつなら通る（上限は設けない）
+    await setHours(FAR2, '06:00', '23:00');
+    const r = await (await bookM(FAR2, '10:00', SHOP.menus.map((m) => m.name))).json();
+    expect(r.ok).toBe(true);
+    expect(r.slot).toBe(PRE + SHOP.menus.reduce((a, m) => a + +m.min, 0) + BUF);
+  });
+  it('料金：1 つでも「お問い合わせください」のメニューが入ると、合計を出さずその文', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', [M_PLAIN.name, M_ASK.name])).json();
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(M_ASK.price);
+    expect(/円/.test(r.price)).toBe(false);
+  });
+  it('メール：お客さん宛・お店宛の元（GAS へ渡す booking）に全メニューが 1 つずつ・施術の合計・所要時間・合計の料金が入る。デモは見本の文に同じ内容', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', PAIR)).json();
+    expect(r.ok).toBe(true);
+    if (IS_DEMO) {
+      expect(gasCalls).toHaveLength(0);
+      expect(r.mailPreview).toContain('　・' + M_SLOT.name + '（' + M_SLOT.min + '分・' + M_SLOT.price + '）');
+      expect(r.mailPreview).toContain('　・' + M_PLAIN.name + '（' + M_PLAIN.min + '分・' + M_PLAIN.price + '）');
+      expect(r.mailPreview).toContain('■ 施術時間　合計' + (+M_SLOT.min + +M_PLAIN.min) + '分');
+      expect(r.mailPreview).toContain('■ 所要時間　約' + PAIR_LEN + '分');
+      expect(r.mailPreview).toContain('■ 料金　　合計 ' + yen(yenOf(M_SLOT) + yenOf(M_PLAIN)) + '（税込）');
+    } else {
+      expect(gasCalls).toHaveLength(1);
+      const b = gasCalls[0].booking;
+      expect(b.menu).toBe(M_SLOT.name + '＋' + M_PLAIN.name);
+      expect(b.items).toEqual([{ name: M_SLOT.name, min: +M_SLOT.min, price: M_SLOT.price }, { name: M_PLAIN.name, min: +M_PLAIN.min, price: M_PLAIN.price }]);
+      expect(b.min).toBe(+M_SLOT.min + +M_PLAIN.min);
+      expect(b.slot).toBe(PAIR_LEN);
+      expect(b.price).toBe(yen(yenOf(M_SLOT) + yenOf(M_PLAIN)));
+      expect(b.end).toBe(t2(m2('10:00') + PAIR_LEN));
+    }
+  });
+  it('お客さん向けの /api/days には、複数メニューでも名前・メニューは出ず、埋まっている時間だけ（長い枠で出る）', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    expect((await bookM(FAR, '10:00', PAIR)).status).toBe(200);
+    const d = await (await api('/api/days')).json();
+    expect(d.busy[FAR]).toEqual([{ s: '10:00', e: t2(m2('10:00') + PAIR_LEN), kind: 'busy' }]);
+    const text = JSON.stringify(d.busy);
+    expect(text).not.toContain('テスト'); expect(text).not.toContain('example.com'); expect(text).not.toContain('＋');
+  });
+  it('いたずら対策（同じ電話・メールの未来のネット予約 3 件）は複数メニューでも同じに数える', async () => {
+    if (IS_DEMO) return;   // デモでは制限が働かない（別のテストで確認済み）
+    await setHours(FAR, '06:00', '23:00');
+    expect((await bookM(FAR, '06:00', PAIR)).status).toBe(200);
+    expect((await bookM(FAR, '10:00', PAIR)).status).toBe(200);
+    expect((await bookM(FAR, '14:00', PAIR)).status).toBe(200);
+    expect((await bookM(FAR, '18:00', PAIR)).status).toBe(429);
+  });
+});

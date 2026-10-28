@@ -32,6 +32,12 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .menus button{display:flex;justify-content:space-between;align-items:center;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:11px 12px}
 .menus button.on{border-color:var(--main);background:var(--soft);font-weight:bold}
 .menus button small{color:var(--mute);font-weight:normal;white-space:nowrap;margin-left:8px}
+.menus button .ck{display:inline-block;width:18px;height:18px;border:1.5px solid var(--line);border-radius:5px;margin-right:8px;vertical-align:-3px;text-align:center;line-height:16px;font-size:12px;color:#fff;flex:none}
+.menus button.on .ck{background:var(--main);border-color:var(--main)}
+.menus button .nm{flex:1 1 auto;display:flex;align-items:center}
+/* 選んだメニューのまとめ（施術の合計・所要時間・料金の目安。2026/10/28 複数メニュー） */
+.selsum{font-size:13px;background:var(--soft);border-radius:10px;padding:8px 12px;margin-top:10px;line-height:1.6}
+.selsum b{font-size:14px}
 .day{border-bottom:1px dotted var(--line);padding:12px 0}
 .day:last-child{border-bottom:0}
 .dname{font-weight:bold;margin-bottom:6px}
@@ -103,9 +109,10 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
     <h2>ご予約</h2><div class="en">RESERVATION</div>
     <div class="guide" aria-label="ご予約の流れ"><p class="gt">ご予約の流れ</p><div class="flow"><div class='st'><span class='dot'></span>メニュー</div><div class='st'><span class='dot'></span>日時</div><div class='st'><span class='dot'></span>お名前などの<wbr>入力</div><div class='st'><span class='dot'></span>送信</div><div class='st last'><span class='dot'></span>予約完了</div></div><p class="note" style="margin:8px 0 0">このページだけでご予約が完了します。</p></div>
     <p class="note" id="topNote" style="display:none;margin:0 0 10px"></p>
-    <b>① メニューを選ぶ</b>
+    <b>① メニューを選ぶ</b><span class="note">（複数も選べます）</span>
     <p class="note" id="taxNote" style="display:none;margin:6px 0 0"></p>
     <div class="menus" id="menuList" style="margin-top:8px"></div>
+    <div class="selsum" id="selSum"></div>
     <div id="otherMenus" style="display:none;margin-top:12px"><p class="note" id="otherMenusNote" style="margin:0"></p></div>
   </div>
   <div class="card">
@@ -131,7 +138,7 @@ var DOW=["日","月","火","水","木","金","土"];
 var todayKey="", nowMin=0, cutoff=120, open=true;
 var hours={};         // "YYYY-MM-DD" -> {s,e}
 var busy={};          // "YYYY-MM-DD" -> [{s,e}]（埋まっている時間。中身は見えない）
-var menuSel=0, cur=null, daySel="";   // daySel＝選んでいる日（横並びの日付）
+var menuSel=[0], cur=null, daySel="";   // menuSel＝選んでいるメニューの番号の並び（複数可。1 つは必ず残す。2026/10/28）。daySel＝選んでいる日（横並びの日付）
 
 function parse(k){var a=k.split("-");return new Date(+a[0],+a[1]-1,+a[2])}
 function jp(k){var d=parse(k);return (d.getMonth()+1)+"月"+d.getDate()+"日（"+DOW[d.getDay()]+"）"}
@@ -144,10 +151,24 @@ function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/
 
 /* 予約1回の長さ（枠をふさぐ分）：メニューの slot か、前の時間＋施術＋後の時間（サーバーと同じ計算。2026/10/21） */
 function slotOf(m){return +m.slot||((+SHOP.preMin||0)+(+m.min)+(+SHOP.bufferMin||0))}
+/* 複数メニュー（2026/10/28。サーバーの lenOf・priceOf と同じ計算）：1 つなら slotOf、2 つ以上なら 前＋施術の合計＋後（slot は使わない） */
+function selMenus(){return menuSel.map(function(i){return SHOP.menus[i]})}
+function lenOf(ms){if(ms.length==1)return slotOf(ms[0]);var t=0;ms.forEach(function(m){t+=+m.min});return (+SHOP.preMin||0)+t+(+SHOP.bufferMin||0)}
+function minOf(ms){var t=0;ms.forEach(function(m){t+=+m.min});return t}
+function yen(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,",")+"円"}
+function priceOf(ms){if(ms.length==1)return ms[0].price||"";var sum=0,ask="";ms.forEach(function(m){var p=String(m.price||""),x=/^([0-9,]+)円$/.exec(p);if(x)sum+=+x[1].replace(/,/g,"");else if(!ask)ask=p||"お問い合わせください"});return ask||yen(sum)}
+function namesOf(ms){return ms.map(function(m){return m.name}).join("＋")}
+/* 選んだメニューのまとめの文（施術の合計・所要時間・料金の目安） */
+function sumHtml(ms){
+  var len=lenOf(ms),mn=minOf(ms),pr=priceOf(ms),many=ms.length>1;
+  var h="<b>"+esc(namesOf(ms))+"</b><br>施術 "+(many?"合計":"")+mn+"分"+(len!=mn?"・所要 約"+len+"分（カウンセリング・お片づけを含む）":"");
+  if(pr)h+="<br>"+(many?"料金の目安　合計 ":"")+esc(pr)+(/円/.test(pr)?"（税込）":"");
+  return h;
+}
 /* 空いている開始時間：来店〜（予約1回の長さ）が営業時間に入り、埋まっている時間（予約・予約停止）と重ならない。今日は、今＋締切より前の時間は出さない */
-function starts(k,menu){
+function starts(k,ms){
   var h=hours[k];if(!h)return [];
-  var slot=slotOf(menu);
+  var slot=lenOf(ms);
   var s=m2(h.s),e=m2(h.e),out=[],bl=busy[k]||[];
   for(var t=s;t+slot<=e;t+=SHOP.stepMin){
     if(k==todayKey&&t<nowMin+cutoff)continue;
@@ -187,10 +208,11 @@ function load(){
 }
 
 function renderCust(){
-  document.getElementById("menuList").innerHTML=SHOP.menus.map(function(m,i){
-    return "<button class='"+(i==menuSel?"on":"")+"' onclick='pickMenu("+i+")'><span>"+esc(m.name)+"</span><small>"+m.min+"分"+(m.price?"・"+esc(m.price):"")+"</small></button>"}).join("");
+  document.getElementById("menuList").innerHTML=SHOP.menus.map(function(m,i){var on=menuSel.indexOf(i)>=0;
+    return "<button class='"+(on?"on":"")+"' aria-pressed='"+(on?"true":"false")+"' onclick='pickMenu("+i+")'><span class='nm'><span class='ck' aria-hidden='true'>"+(on?"✓":"")+"</span>"+esc(m.name)+"</span><small>"+m.min+"分"+(m.price?"・"+esc(m.price):"")+"</small></button>"}).join("");
+  var menu=selMenus();
+  document.getElementById("selSum").innerHTML=sumHtml(menu);
   if(!open){stopMsg("ただいまネット予約の準備中です。LINE かお電話でお願いします。");return}
-  var menu=SHOP.menus[menuSel];
   /* 日付の横並び：営業日を横に並べ、選んだ日の時間だけを下に出す（営業日が増えてもページの長さは変わらない。2026/10/25）
      空きのない日は薄く・押せない（「空きなし」。予約停止で空きが消えることもあるので、埋まっているとは言い切らない） */
   var ks=Object.keys(hours).sort(),days=[];
@@ -210,13 +232,18 @@ function renderCust(){
   h+="<div class='dsel'>"+jp(sel.k)+"</div><div class='chips'>"+sel.st.map(function(t){return "<button class='chip' aria-label='"+t+"から予約する' onclick=\"openForm('"+sel.k+"','"+t+"')\">"+t+"〜</button>"}).join("")+"</div>";
   document.getElementById("custList").innerHTML=h;
 }
-function pickMenu(i){menuSel=i;renderCust()}
+function pickMenu(i){   // 押すたびに選ぶ／外す。1 つは必ず残す（全部外すと空きを出せないため）
+  var at=menuSel.indexOf(i);
+  if(at>=0){if(menuSel.length==1){toast("メニューは 1 つ以上お選びください");return}menuSel.splice(at,1)}
+  else menuSel.push(i);
+  menuSel.sort(function(a,b){return a-b});
+  renderCust()}
 function pickDay(k){daySel=k;renderCust()}
 
 function openForm(k,t){
-  var m=SHOP.menus[menuSel];cur={k:k,t:t,m:menuSel};
+  var ms=selMenus();cur={k:k,t:t,m:menuSel.slice()};
   document.getElementById("sheetBox").innerHTML=
-   "<div class='selbox'>"+jp(k)+"　"+t+"〜<br><span style='font-weight:normal'>"+esc(m.name)+"（"+m.min+"分）"+(m.price?"　"+esc(m.price):"")+(slotOf(m)!=m.min?"<br><small>所要 約"+slotOf(m)+"分（カウンセリング・お片づけを含む）</small>":"")+"</span></div>"+
+   "<div class='selbox'>"+jp(k)+"　"+t+"〜<br><span style='font-weight:normal;font-size:13px'>"+sumHtml(ms)+"</span></div>"+
    "<label class='f'>お名前<span class='req'>必須</span></label><input type='text' id='fName' autocomplete='name' placeholder='例：山田 花子'>"+
    "<label class='f'>電話番号<span class='req'>必須</span></label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
    "<label class='f'>メールアドレス<span class='req'>必須</span></label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'><p class='note' style='margin:4px 0 0'>確認メールをお送りします。お間違いのないようにご入力ください。</p>"+(SHOP.demo===true?"<p class='note' style='margin:6px 0 0'><b>デモです。実際のお名前・電話・メールは入れないでください</b></p>":"")+
@@ -233,9 +260,9 @@ function send(){
   if(!/^[0-9\-]{10,13}$/.test(t)){e.textContent="電話番号を数字で入れてください";return}
   if(!ml){e.textContent="メールアドレスを入れてください（確認メールをお送りします）";return}
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ml)){e.textContent="メールアドレスの形を確かめてください";return}
-  var m=SHOP.menus[cur.m], c=cur, btn=document.getElementById("fSend");
+  var ms=cur.m.map(function(i){return SHOP.menus[i]}), c=cur, btn=document.getElementById("fSend");
   btn.disabled=true;btn.textContent="送っています…";e.textContent="";
-  var body={date:c.k,start:c.t,menu:m.name,name:n,tel:t,email:ml};   // 枠の長さはサーバーがメニューから決める   // サーバーが枠を取り、メールを送る（名前・電話・メールはお店の画面用に預かり、来店日の翌日に空になる）
+  var body={date:c.k,start:c.t,menus:ms.map(function(m){return m.name}),name:n,tel:t,email:ml};   // 枠の長さ・料金はサーバーがメニューから決める（menus＝名前の並び。1 つでも配列。2026/10/28）   // サーバーが枠を取り、メールを送る（名前・電話・メールはお店の画面用に預かり、来店日の翌日に空になる）
   fetch("/api/book",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
   .then(function(r){return r.json().then(function(j){return {status:r.status,body:j}})})
   .then(function(res){
@@ -243,7 +270,7 @@ function send(){
     if(res.status==502){e.innerHTML="<div class='warn'>"+esc((res.body&&res.body.error)||"ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください")+"</div>";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
     if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
     var when=jp(c.k)+" "+c.t+"〜";
-    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を受け付けました</div><p class='note'>"+esc(when)+"<br>"+esc(m.name)+"</p>";
+    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を受け付けました</div><p class='note'>"+esc(when)+"<br>"+esc(namesOf(ms))+(ms.length>1?"<br>施術 合計"+minOf(ms)+"分・所要 約"+lenOf(ms)+"分":"")+"</p>";
     // 場所（住所・駐車場・地図・電話）。値があるものだけ（shop.jsonc）
     var pl=[];
     if(SHOP.address)pl.push(esc(SHOP.address));
