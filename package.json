@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "予約カレンダー（Lift-Off の部品）",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run && vitest run -c vitest.gas.config.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "check": "npm run typecheck && npm test"
   },
