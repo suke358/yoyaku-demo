@@ -1,6 +1,6 @@
 // 予約カレンダー（Lift-Off の部品）：お店の Gmail からメールを送る係（Google Apps Script）2026/10/21
 // Worker（src/worker.js）が、予約の枠を押さえたあとに、ここへ JSON を POST する。
-// 送るのは2通：(a) お客さんへ確認メール (b) お店へ知らせ。MailApp だけを使う（許可を「メールの送信」だけにするため。appsscript.json の oauthScopes で送信だけに絞る）
+// 送るのは2通：(a) お客さんへ確認メール (b) お店へ知らせ。action: 'reminder' のときは 2 日前のお知らせ 1 通（お客さんへ。2026/10/28）。MailApp だけを使う（許可を「メールの送信」だけにするため。appsscript.json の oauthScopes で送信だけに絞る）
 // お店の情報（店名・電話・LINE・住所・駐車場・メール・キャンセルの決まり）は Worker が shop.jsonc から渡す。ここには書かない。
 // 合言葉：「スクリプト プロパティ」の GAS_TOKEN。Worker の秘密の変数 GAS_TOKEN と同じ値にする。合わなければ何もしない。
 // 入れ方は gas/入れ方.md
@@ -16,6 +16,18 @@ function doPost(e) {
     if (!d.customer || !d.booking || !d.shop) return reply({ ok: false, error: 'input' });
     var c = d.customer, b = d.booking, s = d.shop;
     if (!c.email || !s.mail) return reply({ ok: false, error: 'mail' });
+
+    // 2 日前のお知らせ（2026/10/28。Worker の runReminder が action: 'reminder' で送ってくる）：お客さんへ 1 通だけ。お店への知らせは出さない
+    if (d.action === 'reminder') {
+      MailApp.sendEmail({
+        to: c.email,
+        replyTo: s.mail,
+        name: s.name,
+        subject: '【' + (s.shortName || s.name) + '】ご予約のお知らせ（' + (+d.daysBefore || 2) + '日後）',
+        body: reminderBody(c, b, s, +d.daysBefore || 2)
+      });
+      return reply({ ok: true });
+    }
 
     // (a) お客さんへ確認メール
     MailApp.sendEmail({
@@ -71,6 +83,42 @@ function customerBody(c, b, s) {
   L.push('■ キャンセルについて');
   L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
   L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
+  if (s.line) L.push('公式LINE：' + s.line);
+  L.push('');
+  L.push('■ 場所');
+  if (s.address) L.push(s.address);
+  if (s.parking) L.push(s.parking);
+  if (s.mapUrl) L.push('地図：' + s.mapUrl);
+  L.push('');
+  L.push('当日お会いできるのを楽しみにしております。');
+  L.push('');
+  L.push('―――');
+  L.push(s.name);
+  if (s.tel) L.push('電話 ' + s.tel);
+  L.push('（このメールに返信すると、お店に届きます）');
+  return L.join('\n');
+}
+
+// 2 日前のお知らせの文（料金は書かない。効果を断定する言葉は使わない）
+function reminderBody(c, b, s, days) {
+  var L = [];
+  L.push(c.name + ' 様');
+  L.push('');
+  L.push(s.name + ' です。ご予約日が ' + days + ' 日後に近づきましたので、お知らせいたします。');
+  L.push('');
+  L.push('■ 日時　　' + b.when);
+  if (b.items && b.items.length > 1) {
+    L.push('■ メニュー');
+    for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + (b.items[i].min ? '（' + b.items[i].min + '分）' : ''));
+    if (b.min) L.push('■ 施術時間　合計' + b.min + '分');
+  } else {
+    L.push('■ メニュー　' + b.menu + (b.min ? '（' + b.min + '分）' : ''));
+  }
+  if (b.slot) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');
+  L.push('');
+  L.push('■ キャンセルについて');
+  L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
+  L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお早めにお知らせください。');
   if (s.line) L.push('公式LINE：' + s.line);
   L.push('');
   L.push('■ 場所');

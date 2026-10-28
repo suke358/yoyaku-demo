@@ -24,7 +24,8 @@
     { "binding": "BACKUP", "id": "15fa45aa7969431a95ae6f03a68ad18f" }
   ],
   // 毎日 04:30（日本時間）＝ 19:30 UTC に scheduled（バックアップ）が動く。liftoff-seika の 4:10 と重ねない
-  "triggers": { "crons": ["30 19 * * *"] },
+  // 毎日 10:00（日本時間）＝ 01:00 UTC に 2 日前のお知らせメール（shop.jsonc の reminder。enabled が false なら何もしない。2026/10/28）
+  "triggers": { "crons": ["30 19 * * *", "0 1 * * *"] },
   // ブランチごとの確認用ページ（プレビュー）
   "previews": {}
 }

@@ -46,6 +46,8 @@
   "sameDayCutoffMin": 120,             // 当日は何分前まで受けるか
   // デモ用（本番のお店では demo を false にし、demoPassword は消す）
   "allowOrigins": ["https://preview-liftoff-hp.liftoff-358.workers.dev"],   // ほかのサイト（お店の HP）から /api/days を読める許可（Origin をそのまま書く。本番の HP は本番の Worker にだけ。2026/10/26）
+  // 2 日前のお知らせメール（2026/10/28）：毎日 hourJst 時（Cron。wrangler.jsonc の triggers に UTC で書く）に、daysBefore 日後のネット予約へ GAS から 1 通。既定は無効（GAS を新しい版に貼り直した日に true にする）
+  "reminder": { "enabled": false, "daysBefore": 2, "hourJst": 10 },
   "demo": true,                        // true：メールを送らず、予約のあとに確認メールの見本を出す。秘密の変数がなくても予約を受け付ける
   "demoPassword": "hiyori2026"         // お店の画面のログインに表示する（Cloudflare の ADMIN_PASSWORD も同じ値を担当者が入れる）
 }

@@ -19,12 +19,14 @@
 //   DELETE /api/admin/block  {id}                予約を取り消す（あける）
 //   POST   /api/admin/settings {key,value}       型などを保存（value は JSON）
 // GET  /manifest.webmanifest・/apple-touch-icon.png  お店の画面をホーム画面に置くときの名前とアイコン
+// Cron：毎日 4:30 JST バックアップ（runBackup）／毎日 10:00 JST 2 日前のお知らせメール（runReminder。shop.jsonc の reminder.enabled が true のときだけ。2026/10/28）
 
 import shopText from '../public/shop.jsonc';
 
 // ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
 /** @typedef {{ name: string, min: number, price?: string, slot?: number, extraMin?: number, extraNote?: string }} ShopMenu */   // extraMin＝複数メニューのとき、このメニューが入ると所要に足す分（例 お化粧落とし 10 分）。extraNote＝その名前（画面・メールの注記）
-/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[], maxTotalMin?: number }} Shop */
+/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[], maxTotalMin?: number, reminder?: ReminderCfg }} Shop */
+/** @typedef {{ enabled?: boolean, daysBefore?: number, hourJst?: number }} ReminderCfg */   // 2 日前のお知らせメール（2026/10/28）
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, BACKUP?: KVNamespace, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
 /** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
@@ -533,7 +535,7 @@ export async function buildBackup(db) {   // テストから直接呼べるよ�
   var now = nowJST();
   var blocks = (await db.prepare('SELECT id, date, s, e, kind, menu, created_at, name, tel, email, mailng FROM blocks ORDER BY date, s').all()).results;
   var hours = (await db.prepare('SELECT date, s, e FROM hours ORDER BY date').all()).results;
-  var settings = (await db.prepare('SELECT key, value FROM settings WHERE key <> ?1').bind('backup_last').all()).results;
+  var settings = (await db.prepare('SELECT key, value FROM settings WHERE key <> ?1 AND key <> ?2').bind('backup_last', 'reminder_last').all()).results;   // 結果の記録（backup_last・reminder_last）は控えに入れない
   return { version: 1, at: new Date().toISOString(), date: now.date, shop: SHOP.shopName, counts: { blocks: blocks.length, hours: hours.length, settings: settings.length }, blocks: blocks, hours: hours, settings: settings };
 }
 /** @param {Env} env @returns {Promise<{ ok: boolean, key?: string, counts?: { blocks: number, hours: number, settings: number }, error?: string }>} */
@@ -558,10 +560,85 @@ export async function runBackup(env) {   // テストから直接呼べるよう
   return result;
 }
 
+// ---- 2 日前のお知らせメール（2026/10/28。shop.jsonc の reminder。既定は無効）----
+// 毎日 hourJst（日本時間）に Cron（REMINDER_CRON＝UTC に直した時刻）で動く。「日本時間の今日＋daysBefore 日」の日付の、ネット予約（kind net・メールあり）に、GAS（action: 'reminder'）から 1 通。
+// 送った印は D1 の表を変えず KV に reminder:<予約の id>（REMINDER_TTL_SEC で自動で消える）。印があれば送らない（二重送信を止める）。取り消された予約は表から消えているので対象にならない。
+// GAS が失敗した予約は印を付けず、settings の reminder_last と console.error（id だけ。名前・メールは出さない）に残す。翌日は日付が合わないので再送はしない。
+// enabled が false のとき、GAS の秘密の変数がないとき、デモ（demo:true）のときは何も送らない（GAS が旧版のままだと変なメールが出るため、有効にするのは GAS を貼り直す日）
+var BACKUP_CRON = '30 19 * * *';
+/** @type {ReminderCfg} */
+var REMINDER = SHOP.reminder || {};
+var REMINDER_HOUR_JST = (REMINDER.hourJst === undefined) ? 10 : +REMINDER.hourJst;
+var REMINDER_CRON = '0 ' + (((REMINDER_HOUR_JST - 9) % 24 + 24) % 24) + ' * * *';   // 例：10 時 JST → '0 1 * * *'
+var REMINDER_PREFIX = 'reminder:';
+var REMINDER_TTL_SEC = 7 * 24 * 60 * 60;   // 印は 7 日で消える（来店日を過ぎてから）
+/** @param {string} menuText 台帳の menu（「A＋B」） @returns {{ items: BookItem[], min: number, extraNote: string }} 名前から設定のメニューを引き直す（設定から消えたものは名前だけ） */
+function itemsOfMenuText(menuText) {
+  /** @type {BookItem[]} */
+  var items = [];
+  /** @type {ShopMenu[]} */
+  var found = [];
+  String(menuText || '').split('＋').forEach(function (n) {
+    if (!n) return;
+    var m = menuOf(n);
+    if (m) { found.push(m); items.push({ name: String(m.name), min: +m.min, price: m.price || '' }); }
+    else items.push({ name: n, min: 0, price: '' });
+  });
+  return { items: items, min: minOf(found), extraNote: found.length > 1 ? extraNotes(found).join('・') : '' };
+}
+/** @param {Env} env @param {ReminderCfg} [cfg] テストから設定を差しかえるため（省略時は shop.jsonc の reminder。cfg を渡したときだけデモでも動く） @returns {Promise<{ ok: boolean, at: string, date?: string, sent: number, skipped: number, failed: number, reason?: string, error?: string }>} */
+export async function runReminder(env, cfg) {   // テストから直接呼べるように export
+  var c = cfg || REMINDER, at = new Date().toISOString();
+  /** @type {{ ok: boolean, at: string, date?: string, sent: number, skipped: number, failed: number, reason?: string, error?: string }} */
+  var result = { ok: true, at: at, sent: 0, skipped: 0, failed: 0 };
+  if (c.enabled !== true) { result.reason = 'disabled'; return result; }
+  if (DEMO && !cfg) { result.reason = 'demo'; return result; }   // デモのお店は Cron から送らない（テストは cfg を渡して確かめる）
+  if (!(env.GAS_URL && env.GAS_TOKEN)) { result.reason = 'no-gas'; return result; }
+  if (!env.BACKUP) { result.ok = false; result.error = 'KV がつながっていません（wrangler.jsonc の kv_namespaces）'; await saveReminderLast(env, result); return result; }
+  var days = (c.daysBefore === undefined) ? 2 : +c.daysBefore;
+  var target = addDays(nowJST().date, days);
+  result.date = target;
+  try {
+    await ensureTables(env.DB);
+    var rows = /** @type {{ id: string, date: string, s: string, e: string, menu: string, name: string, tel: string, email: string }[]} */ ((await env.DB.prepare(
+      "SELECT id, date, s, e, menu, name, tel, email FROM blocks WHERE date = ?1 AND kind = 'net' AND email <> '' ORDER BY s"
+    ).bind(target).all()).results);
+    var shop = shopInfo();
+    for (var i = 0; i < rows.length; i++) {
+      var b = rows[i], key = REMINDER_PREFIX + b.id;
+      if (await env.BACKUP.get(key)) { result.skipped++; continue; }   // もう送った
+      var parts = itemsOfMenuText(b.menu), slot = m2(b.e) - m2(b.s);
+      /** @type {Booking} */
+      var booking = { id: b.id, date: b.date, when: jpDate(b.date) + ' ' + b.s + '〜', start: b.s, end: b.e, menu: b.menu, min: parts.min, slot: slot, price: '', items: parts.items, extraNote: parts.extraNote };   // 料金は書かない（2 日前の知らせに金額は要らない・相当額は未定）
+      var sent = await sendGas(env, { token: env.GAS_TOKEN, action: 'reminder', daysBefore: days, customer: { name: b.name, tel: b.tel, email: b.email }, booking: booking, shop: shop });
+      if (sent) {
+        await env.BACKUP.put(key, at, { expirationTtl: REMINDER_TTL_SEC, metadata: { date: b.date } });   // 印（予約の中身は入れない）
+        result.sent++;
+      } else {
+        result.failed++;
+        console.error('reminder: GAS failed id=' + b.id + ' date=' + b.date);   // 名前・メールは出さない
+      }
+    }
+    if (result.failed) { result.ok = false; result.error = result.failed + ' 件 送れなかった（GAS の返事がない）'; }
+  } catch (/** @type {any} */ e) {
+    result.ok = false; result.error = String(e && e.message || e).slice(0, 120);
+  }
+  await saveReminderLast(env, result);
+  return result;
+}
+/** @param {Env} env @param {unknown} result */
+async function saveReminderLast(env, result) {
+  try {
+    await env.DB.prepare('INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('reminder_last', JSON.stringify(result)).run();
+  } catch (e) { }
+}
+
 export default {
   /** @param {ScheduledController} controller @param {Env} env @param {ExecutionContext} ctx */
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runBackup(env));
+    // Cron は 2 本：バックアップ（BACKUP_CRON）と 2 日前のお知らせ（REMINDER_CRON）。どちらかを cron の文字で見分ける（知らない cron はバックアップ扱いにしない＝何もしない）
+    if (controller.cron === REMINDER_CRON) ctx.waitUntil(runReminder(env));
+    else if (controller.cron === BACKUP_CRON) ctx.waitUntil(runBackup(env));
   },
   /** @param {Request} request @param {Env} env */
   async fetch(request, env) {
