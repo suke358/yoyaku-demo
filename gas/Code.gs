@@ -65,7 +65,7 @@ function customerBody(c, b, s) {
   } else {
     L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
   }
-  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
+  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');   // extraNote＝お化粧落としなど（shop.jsonc）
   if (b.price) L.push('■ 料金　　' + (many && /円/.test(b.price) ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 「お問い合わせください」のときは「合計」も（税込）も付けない
   L.push('');
   L.push('■ キャンセルについて');

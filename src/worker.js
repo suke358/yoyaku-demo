@@ -23,13 +23,13 @@
 import shopText from '../public/shop.jsonc';
 
 // ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
-/** @typedef {{ name: string, min: number, price?: string, slot?: number }} ShopMenu */
-/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[] }} Shop */
+/** @typedef {{ name: string, min: number, price?: string, slot?: number, extraMin?: number, extraNote?: string }} ShopMenu */   // extraMin＝複数メニューのとき、このメニューが入ると所要に足す分（例 お化粧落とし 10 分）。extraNote＝その名前（画面・メールの注記）
+/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[], maxTotalMin?: number }} Shop */
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, BACKUP?: KVNamespace, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
 /** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
 /** @typedef {{ name: string, min: number, price: string }} BookItem */
-/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string, items: BookItem[] }} Booking */
+/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string, items: BookItem[], extraNote: string }} Booking */   // extraNote＝所要時間に足した分の名前（「お化粧落とし」など。なければ ''）
 /** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
 
 // shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す。注釈に引用符は書けない）
@@ -44,6 +44,7 @@ var PRE_MIN = +(/** @type {number} */ (SHOP.preMin)) || 0;        // 施術の�
 var STEP_MIN = +(/** @type {number} */ (SHOP.stepMin)) || 30;
 var DAYS_AHEAD = +(/** @type {number} */ (SHOP.daysAhead)) || 0;   // 0 ＝ 上限なし（営業時間を入れた日はすべて受ける）
 var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
+var MAX_TOTAL_MIN = +(/** @type {number} */ (SHOP.maxTotalMin)) || 0;   // 施術の合計の上限（分。複数メニュー。0 ＝ なし。2026/10/28 決定 180）
 var DEMO = SHOP.demo === true;
 var LAST_DATE = '9999-12-31';
 var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
@@ -57,7 +58,14 @@ function slotOf(m) { return +(/** @type {number} */ (m.slot)) || (PRE_MIN + (+m.
 // 複数メニュー（2026/10/28）：選んだメニューの組を 1 つの予約にする。禁止の組み合わせ・上限はなし（同じメニューを 2 回は不可）
 // 長さ＝1 つなら slotOf（メニューの slot が効く）、2 つ以上なら 前＋施術の合計＋後（slot は使わない。準備と片づけは 1 回分）。画面（index.html の lenOf）も同じ計算
 /** @param {ShopMenu[]} ms @returns {number} */
-function lenOf(ms) { if (ms.length === 1) return slotOf(ms[0]); var t = 0; ms.forEach(function (m) { t += +m.min; }); return PRE_MIN + t + BUFFER_MIN; }
+function lenOf(ms) { if (ms.length === 1) return slotOf(ms[0]); return PRE_MIN + minOf(ms) + extraOf(ms) + BUFFER_MIN; }
+/** 複数のとき、各メニューの extraMin を足す（例 フェイシャルのお化粧落とし 10 分。名前はコードに書かず shop.jsonc で） @param {ShopMenu[]} ms @returns {number} */
+function extraOf(ms) { var t = 0; ms.forEach(function (m) { t += +(/** @type {number} */ (m.extraMin)) || 0; }); return t; }
+/** extraMin のあるメニューの注記（「お化粧落とし」など。重複なし） @param {ShopMenu[]} ms @returns {string[]} */
+function extraNotes(ms) {
+  /** @type {string[]} */
+  var out = [];
+  ms.forEach(function (m) { var n = String(m.extraNote || ''); if (+(/** @type {number} */ (m.extraMin)) > 0 && n && out.indexOf(n) < 0) out.push(n); }); return out; }
 /** 施術の分の合計 @param {ShopMenu[]} ms @returns {number} */
 function minOf(ms) { var t = 0; ms.forEach(function (m) { t += +m.min; }); return t; }
 /** @param {number} n @returns {string} 3 けたごとに , */
@@ -96,6 +104,7 @@ function pickMenus(b) {
     if (seen[m.name]) return { error: '同じメニューが 2 回入っています' };
     seen[m.name] = true; out.push(m);
   }
+  if (MAX_TOTAL_MIN > 0 && minOf(out) > MAX_TOTAL_MIN) return { error: '施術の合計は ' + MAX_TOTAL_MIN + ' 分までです。組み合わせを減らすか、LINE かお電話でご相談ください' };   // 上限（2026/10/28 決定）
   return { menus: out };
 }
 
@@ -317,7 +326,7 @@ function mailPreview(c, b, s) {
   var many = b.items && b.items.length > 1;   // 複数メニュー：1 行ずつ＋施術の合計（gas/Code.gs の customerBody と同じ形）
   if (many) { L.push('■ メニュー'); b.items.forEach(function (it) { L.push('　・' + it.name + '（' + it.min + '分' + (it.price ? '・' + it.price : '') + '）'); }); L.push('■ 施術時間　合計' + b.min + '分'); }
   else L.push('■ メニュー　' + b.menu + '（' + b.min + '分）');
-  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけを含む）');
+  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');
   if (b.price) L.push('■ 料金　　' + (many && /円/.test(b.price) ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 金額でないときは「合計」を付けない
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
   L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
@@ -365,9 +374,9 @@ async function handleDays(env, request) {
   var busy = {};
   bl.forEach(function (b) { (busy[b.date] = busy[b.date] || []).push({ s: b.s, e: b.e, kind: 'busy' }); });
   // メニュー（名前・施術の分・料金・予約1回の長さ だけ）と案内の 2 文。HP 側のカレンダーが使う。設定のほかの項目（mail・合言葉など）は出さない
-  var menus = SHOP.menus.map(function (m) { return { name: m.name, min: +m.min, price: m.price || '', slot: m.slot ? +m.slot : 0 }; });
+  var menus = SHOP.menus.map(function (m) { return { name: m.name, min: +m.min, price: m.price || '', slot: m.slot ? +m.slot : 0, extraMin: +(/** @type {number} */ (m.extraMin)) || 0, extraNote: m.extraNote || '' }; });
   return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy,
-    menus: menus, otherMenusNote: SHOP.otherMenusNote || '', taxNote: SHOP.taxNote || '' }, 200, corsFor(request));
+    menus: menus, maxTotalMin: MAX_TOTAL_MIN, otherMenusNote: SHOP.otherMenusNote || '', taxNote: SHOP.taxNote || '' }, 200, corsFor(request));
 }
 
 /** @param {Request} request @param {Env} env */
@@ -409,7 +418,7 @@ async function handleBook(request, env) {
   // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
   // 複数メニューのときは menu が「A＋B」、min が施術の合計、price が合計（か「お問い合わせください」）、items に 1 つずつ（メールで 1 行ずつ書く）
   var items = menus.map(function (m) { return { name: String(m.name), min: +m.min, price: m.price || '' }; });
-  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menuName, min: minOf(menus), slot: slot, price: priceOf(menus), items: items };
+  var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menuName, min: minOf(menus), slot: slot, price: priceOf(menus), items: items, extraNote: menus.length > 1 ? extraNotes(menus).join('・') : '' };
   var shop = shopInfo();
   if (DEMO) {
     // デモ：メールは送らない。見本の文を返して画面に出す

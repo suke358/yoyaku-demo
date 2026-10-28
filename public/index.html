@@ -109,7 +109,7 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
     <h2>ご予約</h2><div class="en">RESERVATION</div>
     <div class="guide" aria-label="ご予約の流れ"><p class="gt">ご予約の流れ</p><div class="flow"><div class='st'><span class='dot'></span>メニュー</div><div class='st'><span class='dot'></span>日時</div><div class='st'><span class='dot'></span>お名前などの<wbr>入力</div><div class='st'><span class='dot'></span>送信</div><div class='st last'><span class='dot'></span>予約完了</div></div><p class="note" style="margin:8px 0 0">このページだけでご予約が完了します。</p></div>
     <p class="note" id="topNote" style="display:none;margin:0 0 10px"></p>
-    <b>① メニューを選ぶ</b><span class="note">（複数も選べます）</span>
+    <b>① メニューを選ぶ</b><span class="note" id="menuNote">（複数も選べます）</span>
     <p class="note" id="taxNote" style="display:none;margin:6px 0 0"></p>
     <div class="menus" id="menuList" style="margin-top:8px"></div>
     <div class="selsum" id="selSum"></div>
@@ -153,7 +153,10 @@ function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/
 function slotOf(m){return +m.slot||((+SHOP.preMin||0)+(+m.min)+(+SHOP.bufferMin||0))}
 /* 複数メニュー（2026/10/28。サーバーの lenOf・priceOf と同じ計算）：1 つなら slotOf、2 つ以上なら 前＋施術の合計＋後（slot は使わない） */
 function selMenus(){return menuSel.map(function(i){return SHOP.menus[i]})}
-function lenOf(ms){if(ms.length==1)return slotOf(ms[0]);var t=0;ms.forEach(function(m){t+=+m.min});return (+SHOP.preMin||0)+t+(+SHOP.bufferMin||0)}
+function lenOf(ms){if(ms.length==1)return slotOf(ms[0]);return (+SHOP.preMin||0)+minOf(ms)+extraOf(ms)+(+SHOP.bufferMin||0)}
+function extraOf(ms){var t=0;ms.forEach(function(m){t+=+m.extraMin||0});return t}   // 複数のとき足す分（例 お化粧落とし。名前は shop.jsonc の extraNote）
+function extraNotes(ms){var o=[];ms.forEach(function(m){var n=String(m.extraNote||"");if(+m.extraMin>0&&n&&o.indexOf(n)<0)o.push(n)});return o}
+function maxTotal(){return +SHOP.maxTotalMin||0}   // 施術の合計の上限（分。0 ＝ なし）
 function minOf(ms){var t=0;ms.forEach(function(m){t+=+m.min});return t}
 function yen(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,",")+"円"}
 function priceOf(ms){if(ms.length==1)return ms[0].price||"";var sum=0,from=false,ask=false;ms.forEach(function(m){var x=/^([0-9,]+)\s*円(〜)?$/.exec(String(m.price||""));if(x){sum+=+x[1].replace(/,/g,"");if(x[2])from=true}else ask=true});return ask?"お問い合わせください":yen(sum)+(from?"〜":"")}
@@ -161,7 +164,8 @@ function namesOf(ms){return ms.map(function(m){return m.name}).join("＋")}
 /* 選んだメニューのまとめの文（施術の合計・所要時間・料金の目安） */
 function sumHtml(ms){
   var len=lenOf(ms),mn=minOf(ms),pr=priceOf(ms),many=ms.length>1;
-  var h="<b>"+esc(namesOf(ms))+"</b><br>施術 "+(many?"合計":"")+mn+"分"+(len!=mn?"・所要 約"+len+"分（カウンセリング・お片づけを含む）":"");
+  var ex=many?extraNotes(ms):[];
+  var h="<b>"+esc(namesOf(ms))+"</b><br>施術 "+(many?"合計":"")+mn+"分"+(len!=mn?"・所要 約"+len+"分（カウンセリング・お片づけ"+(ex.length?"・"+esc(ex.join("・")):"")+"を含む）":"");
   if(pr)h+="<br>"+(many?"料金の目安　"+(/円/.test(pr)?"合計 ":""):"")+esc(pr)+(/円/.test(pr)?"（税込）":"");
   return h;
 }
@@ -188,6 +192,7 @@ function applyShop(){
   if(SHOP.lineUrl||SHOP.tel)o.style.display="block";
   if(SHOP.topNote){var tn=document.getElementById("topNote");tn.textContent=SHOP.topNote;tn.style.display="block"}
   if(SHOP.taxNote){var tx=document.getElementById("taxNote");tx.textContent=SHOP.taxNote;tx.style.display="block"}
+  if(maxTotal()>0)document.getElementById("menuNote").textContent="（複数も選べます・施術の合計 "+maxTotal()+"分まで）";
   if(SHOP.backUrl&&SHOP.backText){["backTop","backBottom"].forEach(function(id){var a=document.getElementById(id);a.href=SHOP.backUrl;a.textContent=SHOP.backText;a.className+=" on"})}
   if(SHOP.otherMenusNote){
     // 文の中の「公式LINE」だけ文字リンクに（lineUrl があるとき。なければ文のまま）。緑のボタンは出さない（2026/10/25）
@@ -235,7 +240,9 @@ function renderCust(){
 function pickMenu(i){   // 押すたびに選ぶ／外す。1 つは必ず残す（全部外すと空きを出せないため）
   var at=menuSel.indexOf(i);
   if(at>=0){if(menuSel.length==1){toast("メニューは 1 つ以上お選びください");return}menuSel.splice(at,1)}
-  else menuSel.push(i);
+  else{
+    if(maxTotal()>0&&minOf(selMenus())+(+SHOP.menus[i].min)>maxTotal()){toast("施術の合計は "+maxTotal()+" 分までです");return}   // 上限を越える組み合わせは選べない
+    menuSel.push(i)}
   menuSel.sort(function(a,b){return a-b});
   renderCust()}
 function pickDay(k){daySel=k;renderCust()}

@@ -404,7 +404,7 @@ describe('HP から空きを読む（CORS と menus。2026/10/26）', () => {
     const d = await (await days(OK_ORIGIN)).json();
     expect(d.menus.length).toBe(SHOP.menus.length);
     d.menus.forEach((m, i) => {
-      expect(Object.keys(m).sort()).toEqual(['min', 'name', 'price', 'slot']);
+      expect(Object.keys(m).sort()).toEqual(['extraMin', 'extraNote', 'min', 'name', 'price', 'slot']);   // extraMin・extraNote は 2026/10/28（複数メニューの足す分）
       expect(m.name).toBe(SHOP.menus[i].name);
       expect(m.min).toBe(+SHOP.menus[i].min);
       expect(m.slot).toBe(+SHOP.menus[i].slot || 0);
@@ -724,11 +724,77 @@ describe('複数メニュー（menus＝名前の配列。2026/10/28）', () => {
     expect((await post('/api/book', { date: FAR, start: '10:00', name: 'テスト 太郎', tel: '090-0000-0000', email: 'test@example.com' })).status).toBe(400);
     expect((await bookM(FAR, '10:00', SHOP.menus.map((m) => m.name).concat([M_PLAIN.name]))).status).toBe(400);   // 設定の数より多い
     expect(await blocksOf(FAR)).toHaveLength(0);
-    // 設定にある全部を 1 回ずつなら通る（上限は設けない）
-    await setHours(FAR2, '06:00', '23:00');
-    const r = await (await bookM(FAR2, '10:00', SHOP.menus.map((m) => m.name))).json();
+  });
+  // 上限（2026/10/28 決定）：施術の合計が shop.jsonc の maxTotalMin（180）を超える組み合わせは 400。ぴったりは通る。1 つのメニューには効かない（設定の全メニューは上限を越えるのが前提）
+  const MAXT = +SHOP.maxTotalMin || 0;
+  const EXTRA = (ms) => ms.reduce((a, m) => a + (+m.extraMin || 0), 0);
+  it('上限：施術の合計が maxTotalMin を超える組み合わせは 400（枠を取らない）。ぴったり・以下は 200。設定の全メニューは越える', async () => {
+    expect(MAXT).toBeGreaterThan(0);
+    const all = SHOP.menus.map((m) => m.name);
+    expect(SHOP.menus.reduce((a, m) => a + +m.min, 0)).toBeGreaterThan(MAXT);
+    await setHours(FAR, '06:00', '23:00');
+    const r = await (await bookM(FAR, '10:00', all)).json();
+    expect(r.ok).toBeUndefined();
+    expect(r.error).toContain(MAXT + ' 分まで');
+    expect(await blocksOf(FAR)).toHaveLength(0);
+    // 合計がちょうど上限になる組（min を大きい順に足して作る）か、上限以下の組
+    const sorted = SHOP.menus.slice().sort((a, b) => +b.min - +a.min);
+    const pick = []; let sum = 0;
+    for (const m of sorted) if (sum + +m.min <= MAXT) { pick.push(m); sum += +m.min; }
+    expect(pick.length).toBeGreaterThan(1);
+    const r2 = await (await bookM(FAR, '10:00', pick.map((m) => m.name))).json();
+    expect(r2.ok).toBe(true);
+    expect(r2.min).toBe(sum);
+    expect(r2.slot).toBe(PRE + sum + EXTRA(pick) + BUF);
+    // 1 つ足すと越える組 → 400
+    const more = sorted.find((m) => pick.indexOf(m) < 0);
+    if (more) expect((await bookM(FAR2, '10:00', pick.concat([more]).map((m) => m.name))).status).toBe(400);
+  });
+  it('extraMin（例 お化粧落とし）：複数のときだけ、そのメニューの extraMin を所要に足す。1 つなら slot のまま。メールの所要時間に注記が付く', async () => {
+    const M_EX = SHOP.menus.find((m) => +m.extraMin > 0);
+    expect(M_EX).toBeTruthy(); expect(M_EX.extraNote).toBeTruthy();
+    const other = SHOP.menus.find((m) => m !== M_EX && /円$/.test(m.price || '') && +m.min + +M_EX.min <= MAXT);
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', [other.name, M_EX.name])).json();
     expect(r.ok).toBe(true);
-    expect(r.slot).toBe(PRE + SHOP.menus.reduce((a, m) => a + +m.min, 0) + BUF);
+    const len = PRE + +other.min + +M_EX.min + +M_EX.extraMin + BUF;   // 例：10＋40＋30＋10＋10＝100
+    expect(r.slot).toBe(len);
+    expect(r.e).toBe(t2(m2('10:00') + len));
+    expect(r.min).toBe(+other.min + +M_EX.min);   // 施術の合計には足さない（お客さんに見せる施術の分）
+    if (IS_DEMO) expect(r.mailPreview).toContain('■ 所要時間　約' + len + '分（カウンセリング・お片づけ・' + M_EX.extraNote + 'を含む）');
+    else { const b = gasCalls[0].booking; expect(b.slot).toBe(len); expect(b.extraNote).toBe(M_EX.extraNote); }
+    // 1 つなら slot（extraMin は足さない）
+    const r1 = await (await bookM(FAR2, '10:00', [M_EX.name])).json();
+    await setHours(FAR2, '10:00', '18:00');
+    const r1b = await (await bookM(FAR2, '10:00', [M_EX.name])).json();
+    expect(r1.ok).toBeUndefined();   // FAR2 は営業日を入れる前 → 400（順序の確認）
+    expect(r1b.slot).toBe(slotOf(M_EX));
+    // extraMin のないメニュー 2 つなら足さない
+    const two = SHOP.menus.filter((m) => !(+m.extraMin > 0) && m !== other).slice(0, 1);
+    const r3 = await (await bookM(FAR, '14:00', [other.name, two[0].name])).json();
+    if (r3.ok) expect(r3.slot).toBe(PRE + +other.min + +two[0].min + BUF);
+  });
+  it('GAS（メールの係）がまだ前の版でも、予約と取り消しは問題なく動く：GAS へ渡す booking に前の版が読む項目（when・menu・min・slot・price・id）が同じ形で入り、お店の画面の取り消しで空く', async () => {
+    await setHours(FAR, '10:00', '18:00');
+    const r = await (await bookM(FAR, '10:00', PAIR)).json();
+    expect(r.ok).toBe(true);
+    if (!IS_DEMO) {
+      const b = gasCalls[0].booking, c = gasCalls[0].customer;
+      for (const k of ['when', 'menu', 'id', 'price', 'start', 'end', 'date']) expect(typeof b[k]).toBe('string');   // 前の版の customerBody・shopBody が文として連結する項目
+      for (const k of ['min', 'slot']) expect(typeof b[k]).toBe('number');
+      expect(b.menu).toBe(M_SLOT.name + '＋' + M_PLAIN.name);   // 前の版なら「■ メニュー　A＋B（施術の合計 分）」と 1 行で出る（壊れない）
+      for (const k of ['name', 'tel', 'email']) expect(typeof c[k]).toBe('string');
+      expect(gasCalls[0].shop.name).toBe(SHOP.shopName);
+    }
+    const bl = await blocksOf(FAR);
+    expect(bl).toHaveLength(1);
+    expect(bl[0].menu).toBe(M_SLOT.name + '＋' + M_PLAIN.name);
+    // お店の画面から取り消し → 空く → 同じ時間にまた入る
+    expect((await admin('DELETE', 'block', { id: bl[0].id })).status).toBe(200);
+    expect(await blocksOf(FAR)).toHaveLength(0);
+    const d = await (await api('/api/days')).json();
+    expect(d.busy[FAR]).toBeUndefined();
+    expect((await bookM(FAR, '10:00', PAIR, { tel: '090-1111-1111', email: 'b@example.com' })).status).toBe(200);
   });
   it('料金：1 つでも「お問い合わせください」のメニューが入ると、合計を出さずその文', async () => {
     await setHours(FAR, '10:00', '18:00');
