@@ -43,6 +43,13 @@
 - **KV の注意**：読み出しは「最終的に一致」（書いた直後は別の場所から古い値が見えることがある）。バックアップは 1 日 1 回書くだけなので影響なし。TTL は秒単位で、消えるのは期限から少し遅れることがある
 - **手元で試す**：`npx vitest run`（テストの中で偽物の KV に書き、中身・TTL・IP の表が無いこと・戻しを確かめる）。手で動かすときは `npx wrangler dev --test-scheduled` → `curl "http://localhost:8787/__scheduled?cron=30+19+*+*+*"`（手元の D1・KV に書く。本番には触らない）
 
+## 2 日前のお知らせメール（2026/10/28。既定は無効）
+- **何を**：毎日 `reminder.hourJst`（日本時間。既定 10 時）に、「日本時間の今日＋`daysBefore`（既定 2）日」の日付のネット予約（kind net・メールあり・取り消されていない）へ、GAS（お店の Gmail）から 1 通。お店への知らせは出さない。料金の金額は書かない
+- **どこで**：Cron（wrangler.jsonc の triggers。hourJst を変えたら UTC に直した時刻（hourJst−9）を triggers にも書く。食い違うと黙って動かないので test/reminder.test.js が照らす）→ src/worker.js の runReminder → GAS（gas/Code.gs の action: 'reminder'。中身は `reminder` の下）
+- **印**：D1 の表は変えず、KV（BACKUP と同じ namespace）に `reminder:<予約の id>` を 7 日の期限つきで置く。印があれば送らない。GAS が失敗（返事がない・旧版の Code.gs で action を返さない）なら印を付けず、settings の `reminder_last` と console.error（id と日付だけ）に残す。翌日は日付が合わないので再送しない
+- **安全弁**：shop.jsonc の `reminder.enabled` が false（既定）・デモ（demo:true）・GAS の秘密の変数なし のときは何も送らない。**有効にするのは GAS を新しい Code.gs に貼り直した日**（旧版の Code.gs は reminder の形を input エラーで止めるので、万一先に有効にしても予約確認メールは出ない）
+- **注意**：Cron は「ちょうど 1 回」を保証していないので、ごくまれに同じ人に 2 通届くことがある（1 回の実行の中では 1 通）。10:00 より後に入った 2 日後の予約には届かない（仕様）。9:59 に入れた人には確認メールの直後に届く
+
 ### 戻す手順（マニュアルの下書き。本番の D1 には戻さない。まずテスト用の空の D1 で）
 1. どの日の控えを戻すか決める：`npx wrangler kv key list --binding BACKUP --remote --prefix backup:`（キーの一覧。期限 expiration も出る）
 2. 取り出す：`npx wrangler kv key get --binding BACKUP --remote backup:2026-10-27 > /tmp/backup.json`（この JSON には名前・電話・メールが入っている。終わったら消す。git・iCloud に置かない）

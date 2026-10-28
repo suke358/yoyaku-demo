@@ -13,21 +13,25 @@ function doPost(e) {
     if (!want || !d.token || d.token !== want) {
       return reply({ ok: false, error: 'token' });      // 合言葉が違う：何もしない
     }
+    // 2 日前のお知らせ（2026/10/28。Worker の runReminder が action: 'reminder' で送ってくる）：お客さんへ 1 通だけ。お店への知らせは出さない。
+    // 中身は d.reminder の下（旧版の Code.gs はこの形を input エラーで止めるので、貼り直す前に有効にしても予約確認メールは出ない）。返事に action を入れる（Worker がそれを見て印を付ける）
+    if (d.action === 'reminder') {
+      var rm = d.reminder || {};
+      if (!rm.customer || !rm.booking || !rm.shop) return reply({ ok: false, error: 'input' });
+      if (!rm.customer.email || !rm.shop.mail) return reply({ ok: false, error: 'mail' });
+      var days = +d.daysBefore || 2;
+      MailApp.sendEmail({
+        to: rm.customer.email,
+        replyTo: rm.shop.mail,
+        name: rm.shop.name,
+        subject: '【' + (rm.shop.shortName || rm.shop.name) + '】' + days + '日後のご予約のお知らせ',
+        body: reminderBody(rm.customer, rm.booking, rm.shop, days)
+      });
+      return reply({ ok: true, action: 'reminder' });
+    }
     if (!d.customer || !d.booking || !d.shop) return reply({ ok: false, error: 'input' });
     var c = d.customer, b = d.booking, s = d.shop;
     if (!c.email || !s.mail) return reply({ ok: false, error: 'mail' });
-
-    // 2 日前のお知らせ（2026/10/28。Worker の runReminder が action: 'reminder' で送ってくる）：お客さんへ 1 通だけ。お店への知らせは出さない
-    if (d.action === 'reminder') {
-      MailApp.sendEmail({
-        to: c.email,
-        replyTo: s.mail,
-        name: s.name,
-        subject: '【' + (s.shortName || s.name) + '】ご予約のお知らせ（' + (+d.daysBefore || 2) + '日後）',
-        body: reminderBody(c, b, s, +d.daysBefore || 2)
-      });
-      return reply({ ok: true });
-    }
 
     // (a) お客さんへ確認メール
     MailApp.sendEmail({
@@ -104,7 +108,7 @@ function reminderBody(c, b, s, days) {
   var L = [];
   L.push(c.name + ' 様');
   L.push('');
-  L.push(s.name + ' です。ご予約日が ' + days + ' 日後に近づきましたので、お知らせいたします。');
+  L.push(s.name + ' です。ご予約日の ' + days + ' 日前になりましたので、お知らせいたします。');
   L.push('');
   L.push('■ 日時　　' + b.when);
   if (b.items && b.items.length > 1) {
@@ -114,11 +118,10 @@ function reminderBody(c, b, s, days) {
   } else {
     L.push('■ メニュー　' + b.menu + (b.min ? '（' + b.min + '分）' : ''));
   }
-  if (b.slot) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');
+  if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');   // customerBody と同じ条件
   L.push('');
-  L.push('■ キャンセルについて');
-  L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
-  L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお早めにお知らせください。');
+  if (s.cancelPolicy) { L.push('■ キャンセルについて'); L.push(s.cancelPolicy); }   // お店が決めていないときは書かない（勝手に作らない）
+  L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお早めにお知らせください。');
   if (s.line) L.push('公式LINE：' + s.line);
   L.push('');
   L.push('■ 場所');
