@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ご予約の確認・取り消し</title>
+<!--
+  Lift-Off 部品「予約カレンダー」お客さんの取り消しのページ（2026/10/30）。お店ごとの値は /shop.jsonc。
+  入口は 2 つ：確認メールのリンク /cancel?t=〇〇（予約ごとの推測できない文字列）か、予約日・電話番号・メールアドレスの 3 つの照合。
+  見つかったら 日時・メニューだけ出す（名前は出さない）→「この予約を取り消す」→「本当に取り消す／やめる」の確認 → /api/cancel に confirm:true。
+  期限（shop.jsonc の cancelDeadlineDays。前々日の 23:59 まで）を過ぎた予約は、LINE・電話の案内だけ（ネットでは取り消さない）。
+  見つからない・入力違いは「ご予約が見つかりませんでした」の 1 文だけ（理由は分けない）。
+-->
+<style>
+:root{--main:#e58ca0;--sub:#a8834f;--ink:#4a3a35;--soft:#fbeff2;--bg:#f7f2ea;--line:#e8dccf;--mute:#9c8a80}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:15px;line-height:1.6;word-break:keep-all;overflow-wrap:anywhere}
+button{font:inherit;cursor:pointer;color:inherit}
+.top{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line)}
+.top .ttl{font-size:12px;color:var(--mute);text-align:center;padding:8px 16px}
+main{max-width:520px;margin:0 auto;padding:14px 16px 60px}
+.card{background:#fff;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h2{font-family:"Hiragino Mincho ProN","Noto Serif JP",serif;font-weight:600;font-size:19px;text-align:center;margin:4px 0 0;letter-spacing:.12em}
+.en{font-size:10px;text-align:center;color:var(--sub);letter-spacing:.25em;margin-bottom:12px}
+.note{font-size:12.5px;color:#7d6a62}
+label.f{display:block;font-size:13px;color:#6b5a52;margin:10px 0 4px}
+input[type=text],input[type=tel],input[type=email],input[type=date]{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);-webkit-appearance:none;appearance:none;min-height:46px}
+.selbox{background:var(--soft);border-radius:12px;padding:12px;margin:10px 0;text-align:center;line-height:1.7}
+.selbox b{font-size:16px}
+.err{color:#d33;font-size:13px;min-height:18px;margin-top:6px}
+.btn{display:block;width:100%;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:bold;margin-top:12px;text-align:center;text-decoration:none}
+.btn.main{background:var(--main);color:#fff}
+.btn.main:disabled{opacity:.45}
+.btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+.btn.danger{background:#d33;color:#fff}
+.btn.danger:disabled,.btn.ghost:disabled{opacity:.5}
+.askc{margin-top:12px;padding:12px;background:#fff;border:1.5px solid #d33;border-radius:12px}   /* 取り消しの確認（管理画面の部品 Q と同じ考え。押し間違い防止） */
+.askc b{display:block;font-size:14px;color:#a11}
+.askc small{display:block;font-size:12px;color:var(--mute);margin-top:2px}
+.stop{font-size:14px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:12px 14px;color:#7a5a16;text-align:center}
+.warn{font-size:13px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:10px 12px;margin-top:10px;text-align:left;color:#7a5a16}
+.thanks{text-align:center}.thanks .big{font-size:40px;color:var(--main)}.thanks .h{font-size:20px;font-weight:bold;margin:4px 0 8px}
+.mailpre{white-space:pre-wrap;word-break:break-all;text-align:left;font:12.5px/1.6 -apple-system,"Hiragino Sans",sans-serif;background:#faf7f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0 0;color:var(--ink)}
+.linebtn{display:block;text-align:center;background:#06c755;color:#fff;text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:8px}
+.telbtn{display:block;text-align:center;border:1px solid var(--line);color:var(--ink);text-decoration:none;border-radius:999px;padding:11px;font-weight:bold;margin-top:8px;background:#fff}
+.back{display:none;font-size:15px;line-height:1.3;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:999px;background:#fff;padding:12px 18px;min-height:44px;text-align:center}
+.back.on{display:inline-block}
+.bottomback{text-align:center;margin-top:16px}
+.foot{font-size:11px;color:var(--mute);text-align:center;margin-top:20px}
+.empty{color:var(--mute);text-align:center;padding:14px 0;font-size:14px}
+</style>
+</head>
+<body>
+<div class="top"><div class="ttl" id="ttl">ご予約の確認・取り消し</div></div>
+
+<main>
+  <div class="card">
+    <h2>ご予約の確認・取り消し</h2><div class="en">CANCEL</div>
+    <div id="box"><div class="empty">読みこみ中…</div></div>
+  </div>
+  <div class="card" id="help" style="display:none">
+    <div class="note" style="text-align:center" id="helpNote"></div>
+    <a class="linebtn" id="lineBtn" href="#" target="_blank" rel="noopener" style="display:none">LINE で連絡する</a>
+    <a class="telbtn" id="telBtn" href="#" style="display:none"></a>
+  </div>
+  <div class="bottomback"><a class="back" id="backBottom" href="#"></a><br><a class="back on" href="/" style="margin-top:8px">予約ページへ</a></div>
+  <div class="foot">予約カレンダー（Lift-Off）</div>
+</main>
+
+<script>
+var SHOP=null, TOKEN="", LAST=null;   // LAST＝最後に探した入力（取り消すときに同じものを送る）
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
+function q(name){var m=new RegExp("[?&]"+name+"=([^&#]*)").exec(location.search);return m?decodeURIComponent(m[1].replace(/\+/g," ")):""}
+function box(h){document.getElementById("box").innerHTML=h}
+function ways(){var w=[];if(SHOP.lineUrl)w.push("LINE");if(SHOP.tel)w.push("お電話");return w.length?w.join("か")+"で":"お店に"}   // 「LINEかお電話で」「お店に」（あとに「ご連絡ください」が続く）
+function daysWord(n){return n==2?"前々日":n==1?"前日":n==0?"当日":n+"日前"}
+
+function applyShop(){
+  var R=document.documentElement.style;R.setProperty("--main",SHOP.color.main);R.setProperty("--sub",SHOP.color.sub);
+  document.title=SHOP.shopName+"　ご予約の確認・取り消し";
+  document.getElementById("ttl").textContent=SHOP.shopName+"　ご予約の確認・取り消し";
+  var lb=document.getElementById("lineBtn"),tb=document.getElementById("telBtn"),hp=document.getElementById("help");
+  if(SHOP.lineUrl){lb.href=SHOP.lineUrl;lb.style.display="block"}
+  if(SHOP.tel){tb.href="tel:"+String(SHOP.tel).replace(/[^0-9+]/g,"");tb.textContent="電話する　"+SHOP.tel;tb.style.display="block"}
+  if(SHOP.lineUrl||SHOP.tel){document.getElementById("helpNote").textContent="前日・当日のお取り消し、ご不明な点は";hp.style.display="block"}
+  if(SHOP.backUrl&&SHOP.backText){var a=document.getElementById("backBottom");a.href=SHOP.backUrl;a.textContent=SHOP.backText;a.className+=" on"}
+}
+
+/* 照合の入力 */
+function form(msg){
+  var n=(SHOP.cancelDeadlineDays===undefined)?2:+SHOP.cancelDeadlineDays;
+  box((msg?"<div class='stop'>"+esc(msg)+"</div>":"")+
+   "<p class='note' style='margin:10px 0 0'>ご予約のときに入れた 3 つで、ご予約を探します。"+(SHOP.demo===true?"<br><b>デモです。実際のお名前・電話・メールは入れないでください</b>":"")+"</p>"+
+   "<label class='f'>予約日</label><input type='date' id='fDate'>"+
+   "<label class='f'>電話番号</label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
+   "<label class='f'>メールアドレス</label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'>"+
+   "<div class='err' id='fErr'></div><button class='btn main' id='fFind' onclick='find()'>ご予約を探す</button>"+
+   "<p class='note' style='margin-top:12px'>ネットで取り消せるのは、ご予約日の"+daysWord(n)+"までです。前日・当日は "+esc(ways())+"ご連絡ください。</p>");
+}
+function find(){
+  var d=document.getElementById("fDate").value.trim(),t=document.getElementById("fTel").value.trim(),m=document.getElementById("fMail").value.trim(),e=document.getElementById("fErr");
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d)){e.textContent="予約日を選んでください";return}
+  if(!/^[0-9\-]{10,13}$/.test(t)){e.textContent="電話番号を数字で入れてください";return}
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(m)){e.textContent="メールアドレスの形を確かめてください";return}
+  e.textContent="";var btn=document.getElementById("fFind");btn.disabled=true;btn.textContent="探しています…";
+  LAST={date:d,tel:t,email:m};
+  call(LAST,function(){btn.disabled=false;btn.textContent="ご予約を探す"});
+}
+
+/* /api/cancel を呼ぶ（body に confirm:true を足すと取り消す） */
+function call(body,onFail){
+  fetch("/api/cancel",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
+  .then(function(r){return r.json().then(function(j){return {status:r.status,body:j}})})
+  .then(function(res){show(res,body,onFail)})
+  .catch(function(){if(onFail)onFail();box("<div class='stop'>通信に失敗しました。もう一度お試しください。</div>"+"<button class='btn ghost' onclick='restart()'>もう一度</button>")});
+}
+function restart(){if(TOKEN)lookupToken();else form()}
+
+function show(res,body,onFail){
+  var j=res.body||{};
+  if(res.status==429){if(onFail)onFail();box("<div class='stop'>"+esc(j.error||"しばらくしてからお試しください")+"</div>");return}
+  if(res.status==404){
+    // 見つからない（理由は分けない）。メールのリンクから来たときも、照合の入力に切りかえる
+    form((j.error||"ご予約が見つかりませんでした")+"。"+(TOKEN?"下の 3 つを入れてもう一度お試しください。":"入力を確かめて、もう一度お試しください。"));
+    TOKEN="";return}
+  if(res.status!=200){if(onFail)onFail();box("<div class='stop'>"+esc(j.error||"エラーが起きました。もう一度お試しください。")+"</div><button class='btn ghost' onclick='restart()'>もう一度</button>");return}
+  if(j.already){box("<div class='thanks'><div class='big'>✓</div><div class='h'>取り消し済みです</div><p class='note'>この予約はすでに取り消されています。</p></div>");return}
+  if(j.late){
+    box("<div class='selbox'><b>"+esc(j.when||"")+"</b><br>"+esc(j.menu||"")+"</div><div class='stop'>"+esc(j.message||"前日・当日のお取り消しは、公式LINE かお電話でご連絡ください")+"</div>");
+    return}
+  if(j.canceled){
+    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を取り消しました</div><p class='note'>"+esc(j.when||"")+"<br>"+esc(j.menu||"")+"</p>";
+    if(j.mail===false)h+="<p class='warn'>"+esc(j.note||"取り消しの確認メールをお送りできませんでした。念のため LINE かお電話でもお知らせください")+"</p>";
+    else if(j.demo)h+="<div class='warn'>これはデモです。メールは送っていません。<br>本番では、次の確認メールがお客さまに、取り消しの知らせがお店に届きます。</div><pre class='mailpre'>"+esc(j.mailPreview||"")+"</pre>";
+    else h+="<p class='note' style='margin-top:10px'>取り消しの確認メールをお送りしました。またのご予約をお待ちしております。</p>";
+    box(h+"</div>");return}
+  if(j.found){
+    box("<div class='selbox'><b>"+esc(j.when||"")+"</b><br>"+esc(j.menu||"")+(j.min?"<br><span class='note'>施術 "+(+j.min)+"分</span>":"")+"</div>"+
+      "<p class='note'>この予約で間違いなければ、下のボタンで取り消せます（"+esc(j.cancelBy||"")+" まで）。</p>"+
+      "<button class='btn danger' id='cBtn' onclick='ask()'>この予約を取り消す</button><div id='ask'></div>");
+    return}
+  box("<div class='stop'>エラーが起きました。もう一度お試しください。</div><button class='btn ghost' onclick='restart()'>もう一度</button>");
+}
+/* 取り消しの確認：押してすぐは取り消さない。「本当に取り消す／やめる」を出し、初めのフォーカスは「やめる」（管理画面の部品 Q と同じ） */
+function ask(){
+  document.getElementById("cBtn").style.display="none";
+  document.getElementById("ask").innerHTML="<div class='askc'><b>この予約を取り消します。よろしいですか？</b><small>取り消すと、元にはもどせません（もう一度ご予約いただく形になります）。</small>"+
+    "<button class='btn danger' id='yes' onclick='doCancel()'>本当に取り消す</button><button class='btn ghost' id='no' onclick='noCancel()'>やめる</button></div>";
+  try{document.getElementById("no").focus()}catch(x){}
+}
+function noCancel(){document.getElementById("ask").innerHTML="";document.getElementById("cBtn").style.display="block";try{document.getElementById("cBtn").focus()}catch(x){}}
+function doCancel(){
+  var y=document.getElementById("yes"),n=document.getElementById("no");y.disabled=true;n.disabled=true;y.textContent="取り消しています…";   // 二重に押せない
+  var body=TOKEN?{t:TOKEN,confirm:true}:{date:LAST.date,tel:LAST.tel,email:LAST.email,confirm:true};
+  call(body,function(){y.disabled=false;n.disabled=false;y.textContent="本当に取り消す"});
+}
+function lookupToken(){box("<div class='empty'>ご予約を確かめています…</div>");call({t:TOKEN})}
+
+fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(function(t){
+  SHOP=parseJsonc(t);applyShop();
+  TOKEN=q("t");
+  if(TOKEN)lookupToken();else form();
+}).catch(function(){box("<div class='stop'>ただいまこのページが使えません。LINE かお電話でお願いします。</div>")});
+</script>
+</body>
+</html>

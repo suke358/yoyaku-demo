@@ -10,9 +10,15 @@
 //
 // GET  /api/days（allowOrigins の Origin からは CORS 付き。menus・otherMenusNote・taxNote も返す。2026/10/26）                      今日以降の営業時間と、埋まっている時間（中身は出さない。kind は 'busy'）。今の時刻（日本時間）も返す
 // POST /api/book {date,start,menu か menus,name,tel,email}（menus＝複数メニュー（名前の配列）。1 つなら今までどおり slot、2 つ以上なら 前＋施術の合計＋後。料金は合計、1 つでも金額でなければその文。2026/10/28）（allowOrigins の Origin からは CORS 付き・OPTIONS にも答える。いたずら対策：同じ IP は 10 分に 5 回・同じ電話／メールの未来の予約は 3 件まで。2026/10/26） 営業時間内か・重なりがないか・締切を過ぎていないかを確かめて入れる。枠の長さは 前 preMin＋施術＋後 bufferMin（かメニューの slot）。重なったら 409
+// POST /api/cancel {t} か {date,tel,email}（＋confirm:true で取り消す。2026/10/30 お客さん側の取り消し）
+//   t＝確認メールのリンクの文字列（予約ごとに乱数で作り、台帳の cancel_token に持つ）。3 つの照合は 予約日・電話（ハイフン違いは同じ）・メール（大文字小文字は同じ）
+//   見つからない・過ぎた予約・入力違いは全部 404「ご予約が見つかりませんでした」（理由は分けない）。期限（shop.jsonc の cancelDeadlineDays。既定 2＝前々日の 23:59 JST）を過ぎていれば late:true の案内
+//   confirm なし → 日時・メニューだけ返す（名前は返さない）。confirm:true → 台帳から消して cancels に移し（枠があく）、GAS（action: 'cancel'）からお客さんとお店へ 1 通ずつ。2 回目は 200 で already:true
+//   いたずら対策：同じ IP から 10 分に 5 回まで（/api/book と同じ型。デモでは見ない）。CORS は /api/book と同じ
+// GET  /cancel（public/cancel.html）  取り消しのページ（メールのリンク ?t=… か、3 つの照合）
 // /api/admin/…（ヘッダー X-Admin-Password が secret ADMIN_PASSWORD と同じときだけ。同じ接続元から 5 回間違えると 10 分 429）
 //   POST   /api/admin/login                      合っていれば ok
-//   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings
+//   GET    /api/admin/all                        hours・blocks（kind・menu・名前・電話・メール つき）・settings・cancels（お客さんが取り消した予約。メールを送れなかった印 mailng つき。2026/10/30）
 //   POST   /api/admin/hours  {date,s,e}          営業時間を入れる・変える
 //   DELETE /api/admin/hours  {date}              休みにする（ネット予約がある日は 409）
 //   POST   /api/admin/block  {date,s,e[,menu,kind,name]} LINE・電話の予約（kind man。name は任意。電話・メールは持たない）か 予約停止（kind stop）を入れる（重なったら 409）
@@ -25,14 +31,15 @@ import shopText from '../public/shop.jsonc';
 
 // ---- 型（JSDoc。TypeScript には書き直さず、tsc --noEmit の checkJs で確かめる。2026/10/25）----
 /** @typedef {{ name: string, min: number, price?: string, slot?: number, extraMin?: number, extraNote?: string }} ShopMenu */   // extraMin＝複数メニューのとき、このメニューが入ると所要に足す分（例 お化粧落とし 10 分）。extraNote＝その名前（画面・メールの注記）
-/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[], maxTotalMin?: number, reminder?: ReminderCfg }} Shop */
+/** @typedef {{ shopName: string, shortName?: string, color: { main: string, sub: string }, lineUrl?: string, tel?: string, mail?: string, address?: string, parking?: string, mapUrl?: string, menus: ShopMenu[], preMin?: number, bufferMin?: number, stepMin?: number, cancelPolicy?: string, daysAhead?: number, sameDayCutoffMin?: number, demo?: boolean, taxNote?: string, otherMenusNote?: string, allowOrigins?: string[], maxTotalMin?: number, reminder?: ReminderCfg, cancelDeadlineDays?: number }} Shop */   // cancelDeadlineDays＝お客さんがネットで取り消せるのは来店日の何日前まで（2＝前々日の 23:59 JST まで。2026/10/30）
 /** @typedef {{ enabled?: boolean, daysBefore?: number, hourJst?: number }} ReminderCfg */   // 2 日前のお知らせメール（2026/10/28）
 /** @typedef {{ DB: D1Database, ASSETS: Fetcher, BACKUP?: KVNamespace, GAS_URL?: string, GAS_TOKEN?: string, ADMIN_PASSWORD?: string }} Env */
-/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number }} Block */
+/** @typedef {{ id: string, date: string, s: string, e: string, kind: string, menu: string, created_at: string, name?: string, tel?: string, email?: string, mailng?: number, cancel_token?: string }} Block */
 /** @typedef {{ name: string, tel: string, email: string }} Customer */
 /** @typedef {{ name: string, min: number, price: string }} BookItem */
-/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string, items: BookItem[], extraNote: string }} Booking */   // extraNote＝所要時間に足した分の名前（「お化粧落とし」など。なければ ''）
-/** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string }} ShopInfo */
+/** @typedef {{ id: string, date: string, when: string, start: string, end: string, menu: string, min: number, slot: number, price: string, items: BookItem[], extraNote: string, cancelUrl?: string, cancelPage?: string, cancelBy?: string }} Booking */   // extraNote＝所要時間に足した分の名前（「お化粧落とし」など。なければ ''）。cancelUrl＝取り消しのリンク（?t=…）・cancelPage＝照合のページ・cancelBy＝取り消せる最後の日（「3月10日（水）」。期限がもう過ぎていれば 3 つとも ''。2026/10/30）
+/** @typedef {{ name: string, shortName: string, tel: string, line: string, mail: string, address: string, parking: string, mapUrl: string, cancelPolicy: string, cancelDays: number }} ShopInfo */   // cancelDays＝ネットで取り消せるのは何日前まで（2026/10/30）
+/** @typedef {{ id: string, date: string, s: string, e: string, menu: string, name: string, tel: string, email: string }} CancelRow */
 
 // shop.jsonc の // 注釈を外して読む（行の頭か、空白のあとの // だけ。URL の :// は残す。注釈に引用符は書けない）
 /** @param {string} t @returns {any} */
@@ -48,6 +55,10 @@ var DAYS_AHEAD = +(/** @type {number} */ (SHOP.daysAhead)) || 0;   // 0 ＝ 上�
 var CUTOFF_MIN = (SHOP.sameDayCutoffMin === undefined) ? 120 : +SHOP.sameDayCutoffMin;
 var MAX_TOTAL_MIN = +(/** @type {number} */ (SHOP.maxTotalMin)) || 0;   // 施術の合計の上限（分。複数メニュー。0 ＝ なし。2026/10/28 決定 180）
 var DEMO = SHOP.demo === true;
+// お客さんがネットで取り消せる期限：来店日の CANCEL_DAYS 日前の 23:59（日本時間）まで（既定 2＝前々日まで。2026/10/30 仮の決め。前日・当日は LINE か電話）
+var CANCEL_DAYS = (SHOP.cancelDeadlineDays === undefined) ? 2 : +SHOP.cancelDeadlineDays;
+if (!(Number.isInteger(CANCEL_DAYS) && CANCEL_DAYS >= 0 && CANCEL_DAYS <= 30)) throw new Error('shop.jsonc の cancelDeadlineDays は 0〜30 の整数');   // 起動時に止める
+var NOT_FOUND_MSG = 'ご予約が見つかりませんでした';   // 見つからない・過ぎた予約・入力違い・取り消しの文字列が違う：全部この 1 文（理由を分けない）
 var LAST_DATE = '9999-12-31';
 var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
 /** @param {string} today @returns {string} */
@@ -127,8 +138,13 @@ var SCHEMA = [
   "CREATE TABLE IF NOT EXISTS auth_fail (ip TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until TEXT NOT NULL DEFAULT '', day TEXT NOT NULL)",
   // いたずら対策 A（2026/10/26）：/api/book への送信の記録（接続元 IP と時刻）。10 分に 5 回まで。IP はここにだけ持ち、10 分たった行はアクセスのたびに消す
   'CREATE TABLE IF NOT EXISTS book_rate (ip TEXT NOT NULL, at TEXT NOT NULL)',
-  'CREATE INDEX IF NOT EXISTS book_rate_ip ON book_rate(ip)'
+  'CREATE INDEX IF NOT EXISTS book_rate_ip ON book_rate(ip)',
+  // お客さんが取り消した予約（2026/10/30）：台帳 blocks から消して（枠があく）ここに移す。お店の画面に「お客さまが取り消し」と出す・2 回目の取り消しに「取り消し済み」と答える・メールを送れなかった印（mailng）を持つ。
+  // 名前・電話・メールは blocks と同じく来店日の翌日に空にし、行は 30 日で消す。token＝取り消しのリンクの文字列（2 回目の照合用）。バックアップには入れない（記録だけ）
+  "CREATE TABLE IF NOT EXISTS cancels (id TEXT PRIMARY KEY, date TEXT NOT NULL, s TEXT NOT NULL, e TEXT NOT NULL, menu TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', tel TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '', at TEXT NOT NULL, mailng INTEGER NOT NULL DEFAULT 0)",
+  'CREATE INDEX IF NOT EXISTS cancels_date ON cancels(date)'
 ];
+var CANCEL_KEEP_DAYS = 30;   // cancels の行を残す日数（来店日から）
 var RATE_N = 5, RATE_MIN = 10;   // A：同じ IP から 10 分に 5 回まで
 var FUTURE_N = 3;                // B'：同じ電話・メールの、まだ来店していないネット予約は 3 件まで
 var RATE_MSG = '短い間にたくさん送られました。しばらくしてからお試しください。お急ぎの場合は LINE かお電話でお願いします';
@@ -144,7 +160,7 @@ var ready = null;
 var PII_COLS = ['name', 'tel', 'email'];
 // 足す列の定義（PII の 3 つ＋ mailng＝確認メールを送れなかった印。2026/10/26 レビューの直し：メールが送れなくても予約は残す）
 /** @type {Record<string,string>} */
-var ADD_COLS = { name: "TEXT NOT NULL DEFAULT ''", tel: "TEXT NOT NULL DEFAULT ''", email: "TEXT NOT NULL DEFAULT ''", mailng: 'INTEGER NOT NULL DEFAULT 0' };
+var ADD_COLS = { name: "TEXT NOT NULL DEFAULT ''", tel: "TEXT NOT NULL DEFAULT ''", email: "TEXT NOT NULL DEFAULT ''", mailng: 'INTEGER NOT NULL DEFAULT 0', cancel_token: "TEXT NOT NULL DEFAULT ''" };   // cancel_token＝お客さんの取り消しのリンクの文字列（ネット予約だけ。前からある予約は ''＝リンクでは取り消せず、3 つの照合で取り消す。2026/10/30）
 // 列は 1 本ずつ足す。同時アクセスで別の実行環境が先に足していると「duplicate column」になるが、それは「もう足されている」だけなので握りつぶして続ける。ほかのエラーはそのまま投げる
 /** @param {D1Database} db */
 export async function migrate(db) {   // テストから直接呼べるように export
@@ -158,6 +174,7 @@ export async function migrate(db) {   // テストから直接呼べるように
       if (!/duplicate column/i.test(String(e && e.message || e))) throw e;
     }
   }
+  await db.prepare('CREATE INDEX IF NOT EXISTS blocks_token ON blocks(cancel_token)').run();   // 列を足したあとに（取り消しのリンクで引く用）
 }
 /** @param {D1Database} db */
 function ensureTables(db) {
@@ -172,8 +189,18 @@ export function forgetOld(db, todayKey) {   // テストから直接呼べるよ
   return db.batch([
     db.prepare("UPDATE blocks SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey),
     db.prepare("DELETE FROM auth_fail WHERE day < ?1 AND (until = '' OR until <= ?2)").bind(todayKey, new Date().toISOString()),   // 合言葉を間違えた接続元の記録は翌日に消す。ただし止めている最中（until が先）の行は残す（日付をまたいで早く解けないように。2026/10/26）
-    db.prepare('DELETE FROM book_rate WHERE at < ?1').bind(new Date(Date.now() - RATE_MIN * 60000).toISOString())   // 送信の記録（IP）は 10 分たったら消す
+    db.prepare('DELETE FROM book_rate WHERE at < ?1').bind(new Date(Date.now() - RATE_MIN * 60000).toISOString()),   // 送信の記録（IP）は 10 分たったら消す
+    db.prepare("UPDATE cancels SET name = '', tel = '', email = '' WHERE date < ?1 AND (name <> '' OR tel <> '' OR email <> '')").bind(todayKey),   // 取り消した予約の名前・電話・メールも来店日の翌日に空にする（2026/10/30）
+    db.prepare('DELETE FROM cancels WHERE date < ?1').bind(addDays(todayKey, -CANCEL_KEEP_DAYS))   // 取り消しの記録は来店日から 30 日で消す
   ]);
+}
+// 同じ接続元（IP）から RATE_MIN 分に RATE_N 回まで。数えて入れるを 1 命令で（同時に来ても超えない）。true＝通してよい。key は IP（/api/book）か 'cancel:'＋IP（/api/cancel。別に数える）
+/** @param {D1Database} db @param {string} key @returns {Promise<boolean>} */
+async function rateOk(db, key) {
+  var since = new Date(Date.now() - RATE_MIN * 60000).toISOString();
+  var r = await db.prepare('INSERT INTO book_rate (ip, at) SELECT ?1, ?2 WHERE (SELECT count(*) FROM book_rate WHERE ip = ?1 AND at >= ?3) < ?4')
+    .bind(key, new Date().toISOString(), since, RATE_N).run();
+  return !!(r.meta && r.meta.changes > 0);
 }
 // いたずら対策（2026/10/26）。入力の確かめを通ったあと、予約を入れる前に見る。デモ（shop.jsonc の demo:true）では見ない
 //  B'：同じ電話（ハイフンを除いて比べる）か同じメール（大文字小文字を区別しない）で、来店日が今日以降のネット予約（kind net）が FUTURE_N 件あれば 429
@@ -193,13 +220,7 @@ export async function limitCheck(db, o) {   // テストから直接呼べるよ
   ).bind(o.today, telKey, mailKey, dayStartIso(o.today)).first());
   if (c && c.fut >= FUTURE_N) return { status: 429, error: FUTURE_MSG };
   if (c && c.day >= DAILY_N) return { status: 429, error: DAILY_MSG };
-  if (o.ip) {
-    // 数えて入れるを 1 命令で（同時に来ても RATE_N を超えない）
-    var since = new Date(Date.now() - RATE_MIN * 60000).toISOString();
-    var r = await db.prepare('INSERT INTO book_rate (ip, at) SELECT ?1, ?2 WHERE (SELECT count(*) FROM book_rate WHERE ip = ?1 AND at >= ?3) < ?4')
-      .bind(o.ip, new Date().toISOString(), since, RATE_N).run();
-    if (!(r.meta && r.meta.changes > 0)) return { status: 429, error: RATE_MSG };
-  }
+  if (o.ip && !(await rateOk(db, o.ip))) return { status: 429, error: RATE_MSG };   // 数えて入れるを 1 命令で（同時に来ても RATE_N を超えない）
   return null;
 }
 // ネット予約の枠を取る（1 命令）：重なりなし・同じ電話／メールの未来の予約が FUTURE_N 未満・その日の受付が DAILY_N 未満 のときだけ入る。
@@ -209,11 +230,11 @@ export async function insertNet(db, b, g) {   // テストから直接呼べる�
   if (g.demo) return (await insertBlock(db, b)) ? null : { status: 409, error: '' };
   var telKey = String(b.tel || '').replace(/-/g, ''), mailKey = String(b.email || '').toLowerCase(), dayStart = dayStartIso(g.today);
   var r = await db.prepare(
-    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) ' +
-    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE date = ?2 AND s < ?4 AND e > ?3)' +
+    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email, cancel_token) ' +
+    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?17 WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE date = ?2 AND s < ?4 AND e > ?3)' +
     ' AND ' + FUTURE_SQL.replace('?T', '?11').replace('?K', '?12').replace('?M', '?13') + ' < ?14' +
     ' AND ' + DAILY_SQL.replace('?D', '?15') + ' < ?16'
-  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '', g.today, telKey, mailKey, FUTURE_N, dayStart, DAILY_N).run();
+  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '', g.today, telKey, mailKey, FUTURE_N, dayStart, DAILY_N, b.cancel_token || '').run();
   if (r.meta && r.meta.changes > 0) return null;
   var c = /** @type {{ fut: number, day: number }} */ (await db.prepare(
     'SELECT ' + FUTURE_SQL.replace('?T', '?1').replace('?K', '?2').replace('?M', '?3') + ' AS fut, ' + DAILY_SQL.replace('?D', '?4') + ' AS day'
@@ -266,12 +287,25 @@ async function readJson(request) {
 /** @param {D1Database} db @param {Block} b @returns {Promise<boolean>} */
 async function insertBlock(db, b) {
   var r = await db.prepare(
-    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email) ' +
-    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (' +
+    'INSERT INTO blocks (id, date, s, e, kind, menu, created_at, name, tel, email, cancel_token) ' +
+    'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 WHERE NOT EXISTS (' +
     '  SELECT 1 FROM blocks WHERE date = ?2 AND s < ?4 AND e > ?3)'
-  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '').run();
+  ).bind(b.id, b.date, b.s, b.e, b.kind, b.menu, b.created_at, b.name || '', b.tel || '', b.email || '', b.cancel_token || '').run();
   return r.meta && r.meta.changes > 0;
 }
+// 取り消しのリンクの文字列：乱数 16 バイト（128 ビット）を 16 進 32 文字に。推測できない（1 秒に 1 万回試しても天文学的な回数が要る）。予約の id（時刻から作る）とは別物
+/** @returns {string} */
+function newToken() {
+  var a = new Uint8Array(16); crypto.getRandomValues(a);
+  var s = ''; for (var i = 0; i < a.length; i++) s += ('0' + a[i].toString(16)).slice(-2);
+  return s;
+}
+var TOKEN_RE = /^[0-9a-f]{32}$/;
+// ネットで取り消せる最後の日（来店日の CANCEL_DAYS 日前）。today がその日以前なら取り消せる
+/** @param {string} date 来店日 @returns {string} */
+function cancelByOf(date) { return addDays(date, -CANCEL_DAYS); }
+/** @param {string} date 来店日 @param {string} today 日本時間の今日 @returns {boolean} */
+function canCancel(date, today) { return today <= cancelByOf(date); }
 
 // デモだけ（demo:true）：お店の画面で何も入れていなくても、今日から 14 日は毎日 10:00〜18:00 が空いている形にする。
 // 試しの予約は 24 時間たつと消す（枠が埋まりっぱなしにならないように）。過ぎた日の営業時間も消す。/api/… のたびに動く（Cron なし）
@@ -293,7 +327,7 @@ async function demoPrepare(db) {
 // GAS へ渡す中身（お店の情報は shop.jsonc から。GAS にお店の値は書かない）
 /** @returns {ShopInfo} */
 function shopInfo() {
-  return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', mapUrl: SHOP.mapUrl || '', cancelPolicy: SHOP.cancelPolicy || '' };
+  return { name: SHOP.shopName, shortName: SHOP.shortName || SHOP.shopName, tel: SHOP.tel || '', line: SHOP.lineUrl || '', mail: SHOP.mail || '', address: SHOP.address || '', parking: SHOP.parking || '', mapUrl: SHOP.mapUrl || '', cancelPolicy: SHOP.cancelPolicy || '', cancelDays: CANCEL_DAYS };
 }
 
 // GAS（お店の Gmail から送る係）へ送る。返事が {ok:true} のときだけ true。25 秒で打ち切り
@@ -336,7 +370,11 @@ function mailPreview(c, b, s) {
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');
   if (b.price) L.push('■ 料金　　' + (many && /円/.test(b.price) ? '合計 ' : '') + b.price + (/円/.test(b.price) ? '（税込）' : ''));   // 金額でないときは「合計」を付けない
   L.push('■ キャンセルについて　' + (s.cancelPolicy || ''));
-  L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
+  if (b.cancelUrl) {   // ネットで取り消せる期限の前（gas/Code.gs の customerBody と同じ 3 行。2026/10/30）
+    L.push(b.cancelBy + ' までは、こちらから取り消せます：' + b.cancelUrl);
+    L.push('（リンクが開けないときは ' + b.cancelPage + ' で、予約日・電話番号・メールアドレスを入れてください）');
+    L.push('前日・当日のご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
+  } else L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));
   if (s.mapUrl) L.push('地図：' + s.mapUrl);
   L.push('当日お会いできるのを楽しみにしております。');
@@ -383,7 +421,84 @@ async function handleDays(env, request) {
   // メニュー（名前・施術の分・料金・予約1回の長さ だけ）と案内の 2 文。HP 側のカレンダーが使う。設定のほかの項目（mail・合言葉など）は出さない
   var menus = SHOP.menus.map(function (m) { return { name: m.name, min: +m.min, price: m.price || '', slot: m.slot ? +m.slot : 0, extraMin: +(/** @type {number} */ (m.extraMin)) || 0, extraNote: m.extraNote || '' }; });
   return json({ today: now.date, now: t2(now.min), bufferMin: BUFFER_MIN, preMin: PRE_MIN, stepMin: STEP_MIN, daysAhead: DAYS_AHEAD, sameDayCutoffMin: CUTOFF_MIN, open: isOpen(env), demo: DEMO, hours: hours, busy: busy,
-    menus: menus, maxTotalMin: MAX_TOTAL_MIN, otherMenusNote: SHOP.otherMenusNote || '', taxNote: SHOP.taxNote || '' }, 200, corsFor(request));
+    menus: menus, maxTotalMin: MAX_TOTAL_MIN, otherMenusNote: SHOP.otherMenusNote || '', taxNote: SHOP.taxNote || '', cancelDeadlineDays: CANCEL_DAYS }, 200, corsFor(request));
+}
+
+// ---- お客さん側の予約の取り消し（2026/10/30）----
+// 入口は 2 つ：確認メールのリンクの文字列 t か、予約日・電話・メールの 3 つの照合。見つかったら 日時・メニューだけ返す（名前・電話・メールは返さない）。
+// confirm:true で取り消す：台帳 blocks から消して cancels に移す（1 回の batch。枠は管理画面の取り消しと同じくあく）→ GAS（action: 'cancel'）からお客さんとお店へ 1 通ずつ。
+// GAS が失敗・旧版（action を返さない）でも取り消しは残し、cancels の mailng に印 → お店の画面に「メール未送」と出る（お店がお客さんに連絡する）。
+// 2 回目（もう cancels にある）は 200 で already:true（二重に押しても壊れない・同時に 2 回押しても GAS へは 1 回）。
+// 見つからない・過ぎた予約・入力違い・文字列違いは全部 404 の NOT_FOUND_MSG。期限（前々日の 23:59 JST）を過ぎた予約は late:true で LINE・電話の案内（取り消さない）。
+// いたずら対策：同じ IP から 10 分に 5 回まで（book_rate に 'cancel:'＋IP で別に数える。デモでは見ない）。照合は 3 つ全部が合うときだけ（1 つでも違えば「見つかりません」。他人の予約は電話とメールの両方を知らないと見えない）
+var LATE_MSG = '前日・当日のお取り消しは、公式LINE かお電話' + (SHOP.tel ? '（' + SHOP.tel + '）' : '') + 'でご連絡ください';
+var CANCEL_MAIL_NG_NOTE = '取り消しの確認メールをお送りできませんでした。念のため LINE かお電話でもお知らせください';
+/** @param {Request} request @param {Env} env */
+async function handleCancel(request, env) {
+  var b = await readJson(request);
+  if (!b || typeof b !== 'object') return json({ error: '入力が足りません' }, 400);
+  var fields = ['t', 'date', 'tel', 'email'];
+  for (var fi = 0; fi < fields.length; fi++) { var fv = b[fields[fi]]; if (fv !== undefined && fv !== null && typeof fv !== 'string') return json({ error: '入力の形が違います' }, 400); }
+  if (b.confirm !== undefined && typeof b.confirm !== 'boolean') return json({ error: '入力の形が違います' }, 400);
+  var ip = request.headers.get('CF-Connecting-IP') || '';
+  if (!DEMO && ip && !(await rateOk(env.DB, 'cancel:' + ip))) return json({ error: RATE_MSG }, 429);
+  var now = nowJST();
+  // どちらの入口か（t があれば t。なければ 3 つ）。形が違えば表を引かずに「見つかりません」
+  var token = String(b.t || '').trim(), telKey = '', mailKey = '', date = '';
+  if (token) { if (!TOKEN_RE.test(token)) return json({ error: NOT_FOUND_MSG }, 404); }
+  else {
+    date = String(b.date || '').trim(); telKey = String(b.tel || '').replace(/[^0-9]/g, ''); mailKey = String(b.email || '').trim().toLowerCase();
+    if (!isDate(date) || telKey.length < 10 || telKey.length > 13 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mailKey)) return json({ error: NOT_FOUND_MSG }, 404);
+  }
+  var where = token ? 'cancel_token = ?1' : "date = ?1 AND replace(tel, '-', '') = ?2 AND lower(email) = ?3";
+  var args = token ? [token] : [date, telKey, mailKey];
+  var st1 = env.DB.prepare("SELECT id, date, s, e, menu, name, tel, email FROM blocks WHERE kind = 'net' AND " + where + ' ORDER BY s');
+  var row = /** @type {CancelRow|null} */ (await st1.bind.apply(st1, args).first());
+  if (!row) {
+    // 台帳になければ、取り消し済みの記録を同じ条件で引く → あれば「取り消し済み」（二重に押しても壊れない）。なければ「見つかりません」
+    var st2 = env.DB.prepare('SELECT id, date, s, menu FROM cancels WHERE ' + where.replace('cancel_token', 'token'));
+    var cx = /** @type {{ date: string }|null} */ (await st2.bind.apply(st2, args).first());
+    if (cx && String(cx.date) >= now.date) return json({ ok: true, already: true, message: 'この予約は取り消し済みです' });
+    return json({ error: NOT_FOUND_MSG }, 404);
+  }
+  if (row.date < now.date) return json({ error: NOT_FOUND_MSG }, 404);   // 過ぎた予約（名前なども消えている）
+  var parts = itemsOfMenuText(row.menu), when = jpDate(row.date) + ' ' + row.s + '〜';
+  if (!canCancel(row.date, now.date)) return json({ ok: false, late: true, when: when, menu: row.menu, message: LATE_MSG });   // 前日・当日：ネットでは取り消さない
+  if (b.confirm !== true) return json({ ok: true, found: true, when: when, menu: row.menu, min: parts.min, cancelBy: jpDate(cancelByOf(row.date)) });
+  // 取り消す：cancels に写してから台帳から消す（1 つの batch）。写せた行が 0 なら、たった今ほかで取り消された（already）
+  var at = new Date().toISOString();
+  var rs = await env.DB.batch([
+    env.DB.prepare("INSERT OR IGNORE INTO cancels (id, date, s, e, menu, name, tel, email, token, at, mailng) SELECT id, date, s, e, menu, name, tel, email, cancel_token, ?2, 0 FROM blocks WHERE id = ?1 AND kind = 'net'").bind(row.id, at),
+    env.DB.prepare("DELETE FROM blocks WHERE id = ?1 AND kind = 'net'").bind(row.id)
+  ]);
+  if (!(rs[0].meta && rs[0].meta.changes > 0)) return json({ ok: true, already: true, message: 'この予約は取り消し済みです' });
+  var slot = m2(row.e) - m2(row.s);
+  /** @type {Booking} */
+  var booking = { id: row.id, date: row.date, when: when, start: row.s, end: row.e, menu: row.menu, min: parts.min, slot: slot, price: '', items: parts.items, extraNote: parts.extraNote };   // 料金は書かない
+  var cust = { name: row.name, tel: row.tel, email: row.email };
+  if (DEMO) return json({ ok: true, canceled: true, when: when, menu: row.menu, demo: true, mailPreview: cancelPreview(cust, booking, shopInfo()) });   // デモ：メールは送らない
+  // 本番：お客さんとお店へ 1 通ずつ（旧版の GAS が受け付けない形：customer などは cancel の下。返事に action: 'cancel' がなければ失敗扱い）
+  var rep = (env.GAS_URL && env.GAS_TOKEN) ? await sendGasJson(env, { token: env.GAS_TOKEN, action: 'cancel', cancel: { customer: cust, booking: booking, shop: shopInfo() } }) : null;
+  var sent = !!(rep && rep.ok === true && rep.action === 'cancel');
+  if (!sent) {
+    await env.DB.prepare('UPDATE cancels SET mailng = 1 WHERE id = ?1').bind(row.id).run();
+    console.error('cancel: GAS failed id=' + row.id + ' date=' + row.date);   // 名前・メールは出さない
+    return json({ ok: true, canceled: true, when: when, menu: row.menu, mail: false, note: CANCEL_MAIL_NG_NOTE });
+  }
+  return json({ ok: true, canceled: true, when: when, menu: row.menu, mail: true });
+}
+// デモ用：取り消しメールの見本（本物の文は gas/Code.gs の cancelCustomerBody。そちらを直したらここも合わせる）
+/** @param {Customer} c @param {Booking} b @param {ShopInfo} s @returns {string} */
+function cancelPreview(c, b, s) {
+  var L = [];
+  L.push('件名：【' + s.shortName + '】ご予約の取り消しを承りました');
+  L.push('');
+  L.push(c.name + ' 様');
+  L.push('以下のご予約を取り消しました。');
+  L.push('■ 日時　　' + b.when);
+  L.push('■ メニュー　' + b.menu);
+  L.push('またのご予約をお待ちしております。');
+  return L.join('\n');
 }
 
 /** @param {Request} request @param {Env} env */
@@ -418,14 +533,20 @@ async function handleBook(request, env) {
   // いたずら対策（入力の確かめを全部通ったあと。デモでは見ない）
   var lim = await limitCheck(env.DB, { demo: DEMO, ip: request.headers.get('CF-Connecting-IP') || '', tel: tel, email: email, today: now.date });
   if (lim) return json({ error: lim.error }, lim.status);
-  var id = newId();
-  var ins = await insertNet(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: menuName.slice(0, 200), created_at: new Date().toISOString(), name: name, tel: tel, email: email }, { demo: DEMO, today: now.date });   // 名前・電話・メールはお店の画面用（翌日に空にする）
+  var id = newId(), token = newToken();
+  var ins = await insertNet(env.DB, { id: id, date: b.date, s: t2(s), e: t2(e), kind: 'net', menu: menuName.slice(0, 200), created_at: new Date().toISOString(), name: name, tel: tel, email: email, cancel_token: token }, { demo: DEMO, today: now.date });   // 名前・電話・メールはお店の画面用（翌日に空にする）
   if (ins) return json({ error: ins.error || 'たった今ほかの方の予約が入りました' }, ins.status);
 
   // お客さんに見せるのは来店の時間と施術の時間。所要（slot）はカウンセリング・片づけ込み
   // 複数メニューのときは menu が「A＋B」、min が施術の合計、price が合計（か「お問い合わせください」）、items に 1 つずつ（メールで 1 行ずつ書く）
   var items = menus.map(function (m) { return { name: String(m.name), min: +m.min, price: m.price || '' }; });
+  /** @type {Booking} */
   var booking = { id: id, date: b.date, when: jpDate(b.date) + ' ' + t2(s) + '〜', start: t2(s), end: t2(e), menu: menuName, min: minOf(menus), slot: slot, price: priceOf(menus), items: items, extraNote: menus.length > 1 ? extraNotes(menus).join('・') : '' };
+  // 取り消しの案内（確認メールに書く）：期限（前々日）がまだ来ていない予約にだけリンクを入れる。リンクはこの予約システムの住所（お客さんが開いた URL の origin）
+  if (canCancel(b.date, now.date)) {
+    var origin = new URL(request.url).origin;
+    booking.cancelUrl = origin + '/cancel?t=' + token; booking.cancelPage = origin + '/cancel'; booking.cancelBy = jpDate(cancelByOf(b.date));
+  }
   var shop = shopInfo();
   if (DEMO) {
     // デモ：メールは送らない。見本の文を返して画面に出す
@@ -475,7 +596,8 @@ async function handleAdmin(request, env, path) {
     /** @type {Record<string, unknown>} */
     var settings = {};
     st.forEach(function (r) { try { settings[r.key] = JSON.parse(r.value); } catch (e) { } });
-    return json({ today: nowJST().date, hours: hours, blocks: blocks, settings: settings, bufferMin: BUFFER_MIN, stepMin: STEP_MIN });
+    var cancels = (await env.DB.prepare('SELECT id, date, s, e, menu, name, tel, email, at, mailng FROM cancels ORDER BY date, s').all()).results;   // お客さんが取り消した予約（token は出さない。2026/10/30）
+    return json({ today: nowJST().date, hours: hours, blocks: blocks, settings: settings, cancels: cancels, bufferMin: BUFFER_MIN, stepMin: STEP_MIN });
   }
   var b = await readJson(request) || {};
   if (path === 'hours' && m === 'POST') {
@@ -658,13 +780,14 @@ export default {
     if (p === '/manifest.webmanifest') return manifest();
     if (p === '/apple-touch-icon.png' || p === '/apple-touch-icon-precomposed.png') return env.ASSETS.fetch(new Request(url.origin + '/icon-180.png', request));
     if (p.indexOf('/api/') !== 0) return env.ASSETS.fetch(request);
-    if (p === '/api/book' && request.method === 'OPTIONS') return preflightBook(request);   // 事前確認は表を触らずに返す
+    if ((p === '/api/book' || p === '/api/cancel') && request.method === 'OPTIONS') return preflightBook(request);   // 事前確認は表を触らずに返す
     try {
       await ensureTables(env.DB);
       await forgetOld(env.DB, nowJST().date);   // 来店日が過ぎた予約の名前・電話・メールを空にする
       if (DEMO) await demoPrepare(env.DB);
       if (p === '/api/days' && request.method === 'GET') return await handleDays(env, request);
       if (p === '/api/book' && request.method === 'POST') return withCors(await handleBook(request, env), request);   // 許可した HP からの予約（2026/10/26）
+      if (p === '/api/cancel' && request.method === 'POST') return withCors(await handleCancel(request, env), request);   // お客さん側の取り消し（2026/10/30）
       if (p.indexOf('/api/admin/') === 0) return await handleAdmin(request, env, p.slice('/api/admin/'.length));
       return json({ error: 'ありません' }, 404);
     } catch (/** @type {any} */ e) {

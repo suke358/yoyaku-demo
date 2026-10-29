@@ -1,6 +1,6 @@
 // 予約カレンダー（Lift-Off の部品）：お店の Gmail からメールを送る係（Google Apps Script）2026/10/21
 // Worker（src/worker.js）が、予約の枠を押さえたあとに、ここへ JSON を POST する。
-// 送るのは2通：(a) お客さんへ確認メール (b) お店へ知らせ。action: 'reminder' のときは 2 日前のお知らせ 1 通（お客さんへ。2026/10/28）。MailApp だけを使う（許可を「メールの送信」だけにするため。appsscript.json の oauthScopes で送信だけに絞る）
+// 送るのは2通：(a) お客さんへ確認メール (b) お店へ知らせ。action: 'reminder' のときは 2 日前のお知らせ 1 通（お客さんへ。2026/10/28）。action: 'cancel' のときはお客さんの取り消しの知らせ 2 通（お客さんとお店へ。2026/10/30）。MailApp だけを使う（許可を「メールの送信」だけにするため。appsscript.json の oauthScopes で送信だけに絞る）
 // お店の情報（店名・電話・LINE・住所・駐車場・メール・キャンセルの決まり）は Worker が shop.jsonc から渡す。ここには書かない。
 // 合言葉：「スクリプト プロパティ」の GAS_TOKEN。Worker の秘密の変数 GAS_TOKEN と同じ値にする。合わなければ何もしない。
 // 入れ方は gas/入れ方.md
@@ -28,6 +28,26 @@ function doPost(e) {
         body: reminderBody(rm.customer, rm.booking, rm.shop, days)
       });
       return reply({ ok: true, action: 'reminder' });
+    }
+    // お客さんの取り消し（2026/10/30。Worker の /api/cancel が action: 'cancel' で送ってくる）：お客さんへ 1 通・お店へ 1 通。中身は d.cancel の下（旧版はこの形を input エラーで止める）。返事に action を入れる
+    if (d.action === 'cancel') {
+      var cx = d.cancel || {};
+      if (!cx.customer || !cx.booking || !cx.shop) return reply({ ok: false, error: 'input' });
+      if (!cx.customer.email || !cx.shop.mail) return reply({ ok: false, error: 'mail' });
+      MailApp.sendEmail({
+        to: cx.customer.email,
+        replyTo: cx.shop.mail,
+        name: cx.shop.name,
+        subject: '【' + (cx.shop.shortName || cx.shop.name) + '】ご予約の取り消しを承りました',
+        body: cancelCustomerBody(cx.customer, cx.booking, cx.shop)
+      });
+      MailApp.sendEmail({
+        to: cx.shop.mail,
+        name: cx.shop.name + ' 予約カレンダー',
+        subject: '【ネット予約の取り消し】' + cx.booking.when + ' ' + cx.customer.name + ' 様',
+        body: cancelShopBody(cx.customer, cx.booking)
+      });
+      return reply({ ok: true, action: 'cancel' });
     }
     if (!d.customer || !d.booking || !d.shop) return reply({ ok: false, error: 'input' });
     var c = d.customer, b = d.booking, s = d.shop;
@@ -86,7 +106,13 @@ function customerBody(c, b, s) {
   L.push('');
   L.push('■ キャンセルについて');
   L.push(s.cancelPolicy || '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。');
-  L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
+  if (b.cancelUrl) {   // ネットで取り消せる期限（前々日）の前の予約：リンク → 開けないときは照合のページ → 前日・当日は LINE・電話（2026/10/30。Worker が期限を過ぎた予約には cancelUrl を付けない）
+    L.push(b.cancelBy + ' までは、こちらから取り消せます：' + b.cancelUrl);
+    L.push('（リンクが開けないときは ' + b.cancelPage + ' で、予約日・電話番号・メールアドレスを入れてください）');
+    L.push('前日・当日のご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
+  } else {
+    L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
+  }
   if (s.line) L.push('公式LINE：' + s.line);
   L.push('');
   L.push('■ 場所');
@@ -135,6 +161,52 @@ function reminderBody(c, b, s, days) {
   L.push(s.name);
   if (s.tel) L.push('電話 ' + s.tel);
   L.push('（このメールに返信すると、お店に届きます）');
+  return L.join('\n');
+}
+
+// お客さんが取り消したときの、お客さんへの文（2026/10/30）。料金・キャンセル料は書かない（前々日までの取り消しに料金はかからない）
+function cancelCustomerBody(c, b, s) {
+  var L = [];
+  L.push(c.name + ' 様');
+  L.push('');
+  L.push(s.name + ' です。以下のご予約の取り消しを承りました。');
+  L.push('');
+  L.push('■ 日時　　' + b.when);
+  if (b.items && b.items.length > 1) {
+    L.push('■ メニュー');
+    for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + (b.items[i].min ? '（' + b.items[i].min + '分）' : ''));
+  } else {
+    L.push('■ メニュー　' + b.menu + (b.min ? '（' + b.min + '分）' : ''));
+  }
+  L.push('');
+  L.push('またのご予約を、お待ちしております。');
+  if (s.line) L.push('公式LINE：' + s.line);
+  L.push('');
+  L.push('―――');
+  L.push(s.name);
+  if (s.tel) L.push('電話 ' + s.tel);
+  L.push('（このメールに返信すると、お店に届きます）');
+  return L.join('\n');
+}
+
+// お客さんが取り消したときの、お店への知らせ（2026/10/30）
+function cancelShopBody(c, b) {
+  var L = [];
+  L.push('お客さまがネット予約を取り消しました。');
+  L.push('');
+  L.push('お名前　　' + c.name + ' 様');
+  L.push('電話　　　' + c.tel);
+  L.push('メール　　' + c.email);
+  L.push('日時　　　' + b.when);
+  if (b.items && b.items.length > 1) {
+    L.push('メニュー　' + b.items.length + 'つ');
+    for (var i = 0; i < b.items.length; i++) L.push('　・' + b.items[i].name + (b.items[i].min ? '（' + b.items[i].min + '分）' : ''));
+  } else {
+    L.push('メニュー　' + b.menu + (b.min ? '（' + b.min + '分）' : ''));
+  }
+  if (b.id) L.push('予約の番号　' + b.id);
+  L.push('');
+  L.push('この時間はあきました（HP でまた予約できます）。お客さまには取り消しの確認メールを送ってあります。');
   return L.join('\n');
 }
 

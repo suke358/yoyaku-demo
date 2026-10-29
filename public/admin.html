@@ -68,6 +68,8 @@ input[type=text],input[type=password],select{width:100%;font-size:16px;padding:1
 .ti.stop{background:var(--stop);border:1px solid var(--stop);color:#fff}   /* 予約停止（濃い灰色・白い文字）*/
 .ti button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;white-space:nowrap;color:var(--ink)}
 .ti.stop button{border-color:#fff;color:var(--stop)}
+.ti.cxl{background:#f3efea;border:1px dashed #c9bcb6;color:#6b5a52}   /* お客さまが取り消した予約（薄い灰色・点線。枠はあいている。2026/10/30）*/
+.ti.cxl .nm{text-decoration:line-through}
 .ti .nm{font-weight:bold;font-size:15px}
 .ti .tm{margin-left:8px;font-size:13px}
 .tag{display:inline-block;font-size:11px;line-height:1.5;border-radius:6px;padding:0 6px;margin-right:5px;vertical-align:middle;border:1px solid var(--text-accent)}
@@ -145,7 +147,7 @@ var PW_KEY="yoyakuAdminPw";
 var DOW=["日","月","火","水","木","金","土"];
 var today=new Date();today.setHours(0,0,0,0);
 var view=new Date(today.getFullYear(),today.getMonth(),1);
-var hours={}, blocks={}, sel=null, mode="pat", pat=0, editPat=false, editB=false;
+var hours={}, blocks={}, cancels={}, sel=null, mode="pat", pat=0, editPat=false, editB=false;   // cancels＝お客さまが取り消した予約（日付ごと。2026/10/30）
 var PATS=[], BPATS=[];
 
 function key(d){return d.getFullYear()+"-"+("0"+(d.getMonth()+1)).slice(-2)+"-"+("0"+d.getDate()).slice(-2)}
@@ -199,6 +201,7 @@ function reload(){
     if(d.today){var t=parse(d.today);today=t;}   // 日本時間の今日（サーバーから）
     (d.hours||[]).forEach(function(h){hours[h.date]={s:h.s,e:h.e}});
     (d.blocks||[]).forEach(function(b){(blocks[b.date]=blocks[b.date]||[]).push(b)});
+    cancels={};(d.cancels||[]).forEach(function(c){(cancels[c.date]=cancels[c.date]||[]).push(c)});
     var st=d.settings||{};
     // 予約のバックアップ（毎日 4:30 に自動）の最後の結果。失敗が続くときは担当者に知らせる（2026/10/26）
     var bk=document.getElementById("bkLast");if(bk){var b=st.backup_last;if(b&&b.at){var dt=new Date(b.at);var w=(dt.getMonth()+1)+"/"+dt.getDate()+" "+("0"+dt.getHours()).slice(-2)+":"+("0"+dt.getMinutes()).slice(-2);bk.textContent=b.ok?("バックアップ：最後の成功 "+w+"（"+(b.counts&&b.counts.blocks)+" 件）"):("バックアップ：失敗 "+w+"（担当者にお知らせください）");bk.style.color=b.ok?"":"#b00020";bk.hidden=false}}
@@ -285,6 +288,14 @@ function renderDay(){
     h+="<div class='ti "+(net?"net":"man")+"'><span><span class='nm'>"+esc(nm)+"</span><span class='tm'>"+esc(x.s)+"〜"+esc(x.e)+"</span>"+(x.mailng?"<span class='mlng'>メール未送</span>":"")+"<br>"+
        "<span class='tag "+(net?"net":"man")+"'>"+(net?"ネット":"LINE・電話")+"</span>"+esc(x.menu||"")+"<small style='color:var(--mute)'>（カウンセリング・お片づけを含む）</small>"+
        (ct?"<span class='ct'>"+ct+"</span>":"")+"</span><button onclick=\"unblock('"+esc(x.id)+"')\">予約を取り消す</button></div>";
+  });
+  // お客さまが自分で取り消した予約（2026/10/30）：枠はあいている。メールを送れなかったもの（お店に知らせのメールが届いていない）には印
+  (cancels[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1}).forEach(function(x){
+    var ct="";
+    if(x.email)ct+="<a href='mailto:"+encodeURIComponent(x.email)+"'>"+esc(x.email)+"</a>";
+    if(x.tel)ct+="<a class='tel' href='tel:"+esc(String(x.tel).replace(/[^0-9+]/g,""))+"'>"+esc(x.tel)+"</a>";
+    h+="<div class='ti cxl'><span><span class='nm'>"+esc(x.name||"（お名前なし）")+"</span><span class='tm'>"+esc(x.s)+"〜"+esc(x.e)+"</span>"+(x.mailng?"<span class='mlng'>メール未送</span>":"")+"<br>"+
+       "<span class='tag man'>お客さまが取り消し</span>"+esc(x.menu||"")+"<small style='color:var(--mute)'>（この時間はあいています）</small>"+(ct?"<span class='ct'>"+ct+"</span>":"")+"</span></div>";
   });
   h+="</div>";
   // この日の営業時間を変える（折りたたみ）
