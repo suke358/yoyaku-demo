@@ -109,7 +109,7 @@ function customerBody(c, b, s) {
   if (b.cancelUrl) {   // ネットで取り消せる期限（前々日）の前の予約：リンク → 開けないときは照合のページ → 前日・当日は LINE・電話（2026/10/30。Worker が期限を過ぎた予約には cancelUrl を付けない）
     L.push(b.cancelBy + ' までは、こちらから取り消せます：' + b.cancelUrl);
     L.push('（リンクが開けないときは ' + b.cancelPage + ' で、予約日・電話番号・メールアドレスを入れてください）');
-    L.push('前日・当日のご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
+    L.push(lateWord(s.cancelDays) + 'のご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
   } else {
     L.push('ご変更・キャンセルは、公式LINE かお電話（' + (s.tel || '') + '）でお知らせください。');
   }
@@ -162,6 +162,12 @@ function reminderBody(c, b, s, days) {
   if (s.tel) L.push('電話 ' + s.tel);
   L.push('（このメールに返信すると、お店に届きます）');
   return L.join('\n');
+}
+
+// ネットで取り消せる期限を過ぎた日の呼び方（shop.cancelDays＝何日前まで。worker.js の LATE_WORD と同じ）：2 → 前日・当日、1 → 当日、3 以上 → ご予約日の n 日前から。渡ってこなければ 2 とみなす
+function lateWord(n) {
+  n = +n || 2;
+  return n === 2 ? '前日・当日' : n === 1 ? '当日' : 'ご予約日の ' + (n - 1) + ' 日前から';
 }
 
 // お客さんが取り消したときの、お客さんへの文（2026/10/30）。料金・キャンセル料は書かない（前々日までの取り消しに料金はかからない）

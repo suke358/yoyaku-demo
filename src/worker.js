@@ -57,7 +57,9 @@ var MAX_TOTAL_MIN = +(/** @type {number} */ (SHOP.maxTotalMin)) || 0;   // 施�
 var DEMO = SHOP.demo === true;
 // お客さんがネットで取り消せる期限：来店日の CANCEL_DAYS 日前の 23:59（日本時間）まで（既定 2＝前々日まで。2026/10/30 仮の決め。前日・当日は LINE か電話）
 var CANCEL_DAYS = (SHOP.cancelDeadlineDays === undefined) ? 2 : +SHOP.cancelDeadlineDays;
-if (!(Number.isInteger(CANCEL_DAYS) && CANCEL_DAYS >= 0 && CANCEL_DAYS <= 30)) throw new Error('shop.jsonc の cancelDeadlineDays は 0〜30 の整数');   // 起動時に止める
+if (!(Number.isInteger(CANCEL_DAYS) && CANCEL_DAYS >= 1 && CANCEL_DAYS <= 30)) throw new Error('shop.jsonc の cancelDeadlineDays は 1〜30 の整数');   // 起動時に止める（0＝当日は、時刻を見ない作りなので受けない）
+// 期限を過ぎた日の呼び方（文に使う。gas/Code.gs の lateWord・cancel.html と同じ）：2 → 前日・当日、1 → 当日、3 以上 → ご予約日の n 日前から
+var LATE_WORD = CANCEL_DAYS === 2 ? '前日・当日' : CANCEL_DAYS === 1 ? '当日' : 'ご予約日の ' + (CANCEL_DAYS - 1) + ' 日前から';
 var NOT_FOUND_MSG = 'ご予約が見つかりませんでした';   // 見つからない・過ぎた予約・入力違い・取り消しの文字列が違う：全部この 1 文（理由を分けない）
 var LAST_DATE = '9999-12-31';
 var FAIL_MSG = 'ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください';
@@ -373,7 +375,7 @@ function mailPreview(c, b, s) {
   if (b.cancelUrl) {   // ネットで取り消せる期限の前（gas/Code.gs の customerBody と同じ 3 行。2026/10/30）
     L.push(b.cancelBy + ' までは、こちらから取り消せます：' + b.cancelUrl);
     L.push('（リンクが開けないときは ' + b.cancelPage + ' で、予約日・電話番号・メールアドレスを入れてください）');
-    L.push('前日・当日のご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
+    L.push(LATE_WORD + 'のご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   } else L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお知らせください。');
   if (s.address) L.push('■ 場所　' + s.address + (s.parking ? '　' + s.parking : ''));
   if (s.mapUrl) L.push('地図：' + s.mapUrl);
@@ -431,7 +433,7 @@ async function handleDays(env, request) {
 // 2 回目（もう cancels にある）は 200 で already:true（二重に押しても壊れない・同時に 2 回押しても GAS へは 1 回）。
 // 見つからない・過ぎた予約・入力違い・文字列違いは全部 404 の NOT_FOUND_MSG。期限（前々日の 23:59 JST）を過ぎた予約は late:true で LINE・電話の案内（取り消さない）。
 // いたずら対策：同じ IP から 10 分に 5 回まで（book_rate に 'cancel:'＋IP で別に数える。デモでは見ない）。照合は 3 つ全部が合うときだけ（1 つでも違えば「見つかりません」。他人の予約は電話とメールの両方を知らないと見えない）
-var LATE_MSG = '前日・当日のお取り消しは、公式LINE かお電話' + (SHOP.tel ? '（' + SHOP.tel + '）' : '') + 'でご連絡ください';
+var LATE_MSG = LATE_WORD + 'のお取り消しは、公式LINE かお電話' + (SHOP.tel ? '（' + SHOP.tel + '）' : '') + 'でご連絡ください';
 var CANCEL_MAIL_NG_NOTE = '取り消しの確認メールをお送りできませんでした。念のため LINE かお電話でもお知らせください';
 /** @param {Request} request @param {Env} env */
 async function handleCancel(request, env) {
@@ -447,10 +449,10 @@ async function handleCancel(request, env) {
   var token = String(b.t || '').trim(), telKey = '', mailKey = '', date = '';
   if (token) { if (!TOKEN_RE.test(token)) return json({ error: NOT_FOUND_MSG }, 404); }
   else {
-    date = String(b.date || '').trim(); telKey = String(b.tel || '').replace(/[^0-9]/g, ''); mailKey = String(b.email || '').trim().toLowerCase();
-    if (!isDate(date) || telKey.length < 10 || telKey.length > 13 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mailKey)) return json({ error: NOT_FOUND_MSG }, 404);
+    date = String(b.date || '').trim(); telKey = String(b.tel || '').replace(/[^0-9]/g, ''); mailKey = String(b.email || '').trim();
+    if (!isDate(date) || telKey.length < 10 || telKey.length > 13 || mailKey.length > 100 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mailKey)) return json({ error: NOT_FOUND_MSG }, 404);   // メールは /api/book と同じ 100 文字まで
   }
-  var where = token ? 'cancel_token = ?1' : "date = ?1 AND replace(tel, '-', '') = ?2 AND lower(email) = ?3";
+  var where = token ? 'cancel_token = ?1' : "date = ?1 AND replace(tel, '-', '') = ?2 AND lower(email) = lower(?3)";   // lower は表と入力の両方を SQLite の同じ lower で（JS の toLowerCase と混ぜない。レビュー 10/30）
   var args = token ? [token] : [date, telKey, mailKey];
   var st1 = env.DB.prepare("SELECT id, date, s, e, menu, name, tel, email FROM blocks WHERE kind = 'net' AND " + where + ' ORDER BY s');
   var row = /** @type {CancelRow|null} */ (await st1.bind.apply(st1, args).first());
@@ -468,7 +470,8 @@ async function handleCancel(request, env) {
   // 取り消す：cancels に写してから台帳から消す（1 つの batch）。写せた行が 0 なら、たった今ほかで取り消された（already）
   var at = new Date().toISOString();
   var rs = await env.DB.batch([
-    env.DB.prepare("INSERT OR IGNORE INTO cancels (id, date, s, e, menu, name, tel, email, token, at, mailng) SELECT id, date, s, e, menu, name, tel, email, cancel_token, ?2, 0 FROM blocks WHERE id = ?1 AND kind = 'net'").bind(row.id, at),
+    // OR REPLACE：同じ番号の古い記録（バックアップから戻したあと など）が残っていても上書きして進む。同時の 2 回目は、台帳の行がもう無いので 0 件（レビュー 10/30）
+    env.DB.prepare("INSERT OR REPLACE INTO cancels (id, date, s, e, menu, name, tel, email, token, at, mailng) SELECT id, date, s, e, menu, name, tel, email, cancel_token, ?2, 0 FROM blocks WHERE id = ?1 AND kind = 'net'").bind(row.id, at),
     env.DB.prepare("DELETE FROM blocks WHERE id = ?1 AND kind = 'net'").bind(row.id)
   ]);
   if (!(rs[0].meta && rs[0].meta.changes > 0)) return json({ ok: true, already: true, message: 'この予約は取り消し済みです' });

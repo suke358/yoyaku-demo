@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">   <!-- リンクの文字列（?t=…）を、ここから押した先（LINE・HP）に Referer で渡さない（レビュー 10/30） -->
 <title>ご予約の確認・取り消し</title>
 <!--
   Lift-Off 部品「予約カレンダー」お客さんの取り消しのページ（2026/10/30）。お店ごとの値は /shop.jsonc。
@@ -73,10 +74,11 @@ input[type=text],input[type=tel],input[type=email],input[type=date]{width:100%;f
 var SHOP=null, TOKEN="", LAST=null;   // LAST＝最後に探した入力（取り消すときに同じものを送る）
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
-function q(name){var m=new RegExp("[?&]"+name+"=([^&#]*)").exec(location.search);return m?decodeURIComponent(m[1].replace(/\+/g," ")):""}
+function q(name){var m=new RegExp("[?&]"+name+"=([^&#]*)").exec(location.search);if(!m)return "";try{return decodeURIComponent(m[1].replace(/\+/g," "))}catch(x){return ""}}   // 壊れた URL（%E0 など）でも落ちずに照合の入力へ
+function daysWord(n){return n==2?"前々日":n==1?"前日":n+"日前"}
+function lateWord(n){return n==2?"前日・当日":n==1?"当日":"ご予約日の "+(n-1)+" 日前から"}   // サーバー（LATE_WORD）・GAS（lateWord）と同じ
 function box(h){document.getElementById("box").innerHTML=h}
 function ways(){var w=[];if(SHOP.lineUrl)w.push("LINE");if(SHOP.tel)w.push("お電話");return w.length?w.join("か")+"で":"お店に"}   // 「LINEかお電話で」「お店に」（あとに「ご連絡ください」が続く）
-function daysWord(n){return n==2?"前々日":n==1?"前日":n==0?"当日":n+"日前"}
 
 function applyShop(){
   var R=document.documentElement.style;R.setProperty("--main",SHOP.color.main);R.setProperty("--sub",SHOP.color.sub);
@@ -85,20 +87,21 @@ function applyShop(){
   var lb=document.getElementById("lineBtn"),tb=document.getElementById("telBtn"),hp=document.getElementById("help");
   if(SHOP.lineUrl){lb.href=SHOP.lineUrl;lb.style.display="block"}
   if(SHOP.tel){tb.href="tel:"+String(SHOP.tel).replace(/[^0-9+]/g,"");tb.textContent="電話する　"+SHOP.tel;tb.style.display="block"}
-  if(SHOP.lineUrl||SHOP.tel){document.getElementById("helpNote").textContent="前日・当日のお取り消し、ご不明な点は";hp.style.display="block"}
+  if(SHOP.lineUrl||SHOP.tel){document.getElementById("helpNote").textContent=lateWord(cd())+"のお取り消し、ご不明な点は";hp.style.display="block"}
   if(SHOP.backUrl&&SHOP.backText){var a=document.getElementById("backBottom");a.href=SHOP.backUrl;a.textContent=SHOP.backText;a.className+=" on"}
 }
 
 /* 照合の入力 */
+function cd(){return (SHOP.cancelDeadlineDays===undefined)?2:+SHOP.cancelDeadlineDays}   // 何日前まで取り消せるか（shop.jsonc）
 function form(msg){
-  var n=(SHOP.cancelDeadlineDays===undefined)?2:+SHOP.cancelDeadlineDays;
+  var n=cd();
   box((msg?"<div class='stop'>"+esc(msg)+"</div>":"")+
    "<p class='note' style='margin:10px 0 0'>ご予約のときに入れた 3 つで、ご予約を探します。"+(SHOP.demo===true?"<br><b>デモです。実際のお名前・電話・メールは入れないでください</b>":"")+"</p>"+
    "<label class='f'>予約日</label><input type='date' id='fDate'>"+
    "<label class='f'>電話番号</label><input type='tel' id='fTel' autocomplete='tel' placeholder='例：090-1234-5678'>"+
    "<label class='f'>メールアドレス</label><input type='email' id='fMail' autocomplete='email' inputmode='email' placeholder='例：hanako@example.com'>"+
    "<div class='err' id='fErr'></div><button class='btn main' id='fFind' onclick='find()'>ご予約を探す</button>"+
-   "<p class='note' style='margin-top:12px'>ネットで取り消せるのは、ご予約日の"+daysWord(n)+"までです。前日・当日は "+esc(ways())+"ご連絡ください。</p>");
+   "<p class='note' style='margin-top:12px'>ネットで取り消せるのは、ご予約日の"+daysWord(n)+"までです。"+lateWord(n)+"は "+esc(ways())+"ご連絡ください。</p>");
 }
 function find(){
   var d=document.getElementById("fDate").value.trim(),t=document.getElementById("fTel").value.trim(),m=document.getElementById("fMail").value.trim(),e=document.getElementById("fErr");
@@ -121,7 +124,7 @@ function restart(){if(TOKEN)lookupToken();else form()}
 
 function show(res,body,onFail){
   var j=res.body||{};
-  if(res.status==429){if(onFail)onFail();box("<div class='stop'>"+esc(j.error||"しばらくしてからお試しください")+"</div>");return}
+  if(res.status==429){if(onFail)onFail();box("<div class='stop'>"+esc(j.error||"しばらくしてからお試しください")+"</div><button class='btn ghost' onclick='restart()'>もう一度</button>");return}
   if(res.status==404){
     // 見つからない（理由は分けない）。メールのリンクから来たときも、照合の入力に切りかえる
     form((j.error||"ご予約が見つかりませんでした")+"。"+(TOKEN?"下の 3 つを入れてもう一度お試しください。":"入力を確かめて、もう一度お試しください。"));
@@ -162,6 +165,7 @@ function lookupToken(){box("<div class='empty'>ご予約を確かめています
 fetch("/shop.jsonc",{cache:"no-store"}).then(function(r){return r.text()}).then(function(t){
   SHOP=parseJsonc(t);applyShop();
   TOKEN=q("t");
+  if(TOKEN){try{history.replaceState(null,"",location.pathname)}catch(x){}}   // 文字列を読んだらアドレスバーから消す（履歴・共有に残さない。できない端末は飛ばす）
   if(TOKEN)lookupToken();else form();
 }).catch(function(){box("<div class='stop'>ただいまこのページが使えません。LINE かお電話でお願いします。</div>")});
 </script>

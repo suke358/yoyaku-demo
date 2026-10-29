@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const src = readFileSync(new URL('../gas/Code.gs', import.meta.url), 'utf8');
 const pick = (name) => { const m = src.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n}\\n')); if (!m) throw new Error(name + ' が Code.gs にない'); return m[0]; };
-const fns = new Function(pick('customerBody') + pick('shopBody') + pick('reminderBody') + pick('cancelCustomerBody') + pick('cancelShopBody') + '\nreturn { customerBody, shopBody, reminderBody, cancelCustomerBody, cancelShopBody };')();
+const fns = new Function(pick('customerBody') + pick('shopBody') + pick('reminderBody') + pick('cancelCustomerBody') + pick('cancelShopBody') + pick('lateWord') + '\nreturn { customerBody, shopBody, reminderBody, cancelCustomerBody, cancelShopBody, lateWord };')();
 const SHOP = { name: 'テストのお店', shortName: 'テスト', tel: '000-0000-0000', line: 'https://line.example/x', mail: 'shop@example.com', address: '〒000-0000 どこか市 1-2-3', parking: '駐車場は 1 番', mapUrl: 'https://www.google.com/maps/place/?q=place_id:ABC123', cancelPolicy: '前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。', cancelDays: 2 };
 const C = { name: 'テスト 花子', email: 'hana@example.com' };
 const ONE = { id: 'a1', date: '2027-03-12', when: '3月12日（金） 10:00〜', start: '10:00', end: '11:00', menu: 'よもぎ蒸し', min: 40, slot: 60, price: '', items: [{ name: 'よもぎ蒸し', min: 40, price: '5,500円' }], extraNote: '' };
@@ -70,6 +70,11 @@ describe('お客さんの取り消し（2026/10/30）', () => {
     expect(t).toContain('■ キャンセルについて\n前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。\n3月10日（水） までは、こちらから取り消せます：https://x/cancel?t=abc\n（リンクが開けないときは https://x/cancel で、予約日・電話番号・メールアドレスを入れてください）\n前日・当日のご変更・キャンセルは、公式LINE かお電話（000-0000-0000）でお知らせください。\n公式LINE：https://line.example/x');
     expect(t).not.toContain('\nご変更・キャンセルは、公式LINE かお電話（000-0000-0000）でお知らせください。');   // 前の 1 行は出ない（「前日・当日の…」の行に置きかわる）
     expect(t).not.toMatch(/undefined|null|NaN/); expect(t).not.toMatch(/\n\n\n/);
+  });
+  it('期限の呼び方（lateWord）は cancelDays に追従する：2 → 前日・当日、1 → 当日、3 → ご予約日の 2 日前から、渡ってこなければ 2 扱い', () => {
+    expect(fns.lateWord(2)).toBe('前日・当日'); expect(fns.lateWord(1)).toBe('当日'); expect(fns.lateWord(3)).toBe('ご予約日の 2 日前から'); expect(fns.lateWord(undefined)).toBe('前日・当日');
+    expect(fns.customerBody(CT, LINKED, { ...SHOP, cancelDays: 1 })).toContain('当日のご変更・キャンセルは');
+    expect(fns.customerBody(CT, LINKED, { ...SHOP, cancelDays: 1 })).not.toContain('前日・当日');
   });
   it('予約確認メール：リンクがない予約（前日・当日の予約。旧版の Worker も）は今までどおり 1 行', () => {
     const t = fns.customerBody(CT, ONE, SHOP);

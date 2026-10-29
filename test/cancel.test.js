@@ -252,6 +252,25 @@ describe('お客さん側の予約の取り消し（2026/10/30）', () => {
     }
   });
 
+  it('レビュー 10/30：cancels に同じ番号の古い記録が残っていても（バックアップから戻したあと など）、取り消しは正しく進む（台帳から消え・記録は新しくなり・GAS に送る）。黙って枠だけ消えない', async () => {
+    const a = await book(D, '10:00');
+    await env.DB.prepare("INSERT INTO cancels (id, date, s, e, menu, name, tel, email, token, at, mailng) VALUES (?1, ?2, '10:00', '11:00', 'x', '', '', '', '', '2027-01-01T00:00:00Z', 1)").bind(a.id, D).run();
+    gasCalls.length = 0;
+    const j = await (await cancel({ t: a.token, confirm: true })).json();
+    expect(j.canceled).toBe(true); expect(j.already).toBeUndefined();
+    expect(await blocksOf(D)).toHaveLength(0);
+    const cx = await cancelsAll();
+    expect(cx).toHaveLength(1);
+    expect(cx[0]).toMatchObject({ id: a.id, name: 'テスト 花子', token: a.token, at: new Date(NOW_UTC).toISOString(), mailng: IS_DEMO ? 0 : 0 });
+    if (!IS_DEMO) expect(gasCalls.filter((c) => c.action === 'cancel')).toHaveLength(1);
+  });
+
+  it('レビュー 10/30：メールが 100 文字を超える・大文字の照合（lower は表と入力の両方に）', async () => {
+    await book(D, '10:00');
+    expect((await cancel({ date: D, tel: TEL, email: 'a'.repeat(95) + '@example.com' })).status).toBe(404);
+    expect((await cancel({ date: D, tel: TEL, email: 'HANA@EXAMPLE.COM' })).status).toBe(200);
+  });
+
   it('取り消した予約の名前・電話・メールは来店日の翌日に空になる。記録は来店日から 30 日で消える。バックアップには入れない', async () => {
     const a = await book(D, '10:00');
     expect((await (await cancel({ t: a.token, confirm: true })).json()).canceled).toBe(true);
