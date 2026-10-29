@@ -121,7 +121,7 @@ function reminderBody(c, b, s, days) {
   if (b.slot && b.slot !== b.min) L.push('■ 所要時間　約' + b.slot + '分（カウンセリング・お片づけ' + (b.extraNote ? '・' + b.extraNote : '') + 'を含む）');   // customerBody と同じ条件
   L.push('');
   if (s.cancelPolicy) { L.push('■ キャンセルについて'); L.push(s.cancelPolicy); }   // お店が決めていないときは書かない（勝手に作らない）
-  L.push('ご変更・キャンセルは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお早めにお知らせください。');
+  L.push('ご都合が悪くなったときは、公式LINE かお電話' + (s.tel ? '（' + s.tel + '）' : '') + 'でお早めにご連絡ください。');
   if (s.line) L.push('公式LINE：' + s.line);
   L.push('');
   L.push('■ 場所');

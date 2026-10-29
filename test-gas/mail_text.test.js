@@ -42,10 +42,10 @@ describe('2 日前のお知らせの文面（reminderBody）', () => {
   });
   it('キャンセルの決まり・連絡先・LINE。cancelPolicy が空なら その段落は出ない（勝手に作らない）', () => {
     const t = fns.reminderBody(C, ONE, SHOP, 2);
-    expect(t).toContain('■ キャンセルについて\n前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。\nご変更・キャンセルは、公式LINE かお電話（000-0000-0000）でお早めにお知らせください。\n公式LINE：https://line.example/x');
+    expect(t).toContain('■ キャンセルについて\n前日のキャンセルは料金の50%、当日のキャンセルは料金の100%をいただきます。\nご都合が悪くなったときは、公式LINE かお電話（000-0000-0000）でお早めにご連絡ください。\n公式LINE：https://line.example/x');
     const u = fns.reminderBody(C, ONE, { ...SHOP, cancelPolicy: '' }, 2);
     expect(u).not.toContain('キャンセルについて'); expect(u).not.toContain('50%');
-    expect(u).toContain('ご変更・キャンセルは、公式LINE かお電話（000-0000-0000）でお早めにお知らせください。');
+    expect(u).toContain('ご都合が悪くなったときは、公式LINE かお電話（000-0000-0000）でお早めにご連絡ください。');
   });
   it('末尾（署名・返信の案内）は予約確認メール（customerBody）と同じ言い方', () => {
     const tail = (t) => t.trim().split('\n').slice(-4).join('\n');
