@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
+<meta name="format-detection" content="email=no">   <!-- iOS がメールアドレスを勝手にリンク（下線）にしない（2026/10/30）。電話は触らない -->
 <title>ご予約</title>
 <!--
   Lift-Off 部品「予約カレンダー」お客さんの画面（2026/10/20）。お店ごとの値は /shop.jsonc（店名・色・メニュー・片づけの分 など）。
@@ -62,6 +63,8 @@ input[type=text],input[type=tel],input[type=email]{width:100%;font-size:16px;pad
 .btn.main:disabled{opacity:.45}
 .btn.ghost{background:#fff;border:1px solid var(--line)}
 .thanks{text-align:center}.thanks .big{font-size:40px;color:var(--main)}
+.thanks .note,.thanks .policy,.thanks .warn{word-break:keep-all;overflow-wrap:anywhere}   /* 完了画面の文は言葉の途中で切らない（<wbr> の所で折り返す。2026/10/30） */
+.nw{white-space:nowrap}   /* 途中で切らない短い言葉（「203号室」「LINEかお電話で」など） */
 .mailpre{white-space:pre-wrap;word-break:break-all;text-align:left;font:12.5px/1.6 -apple-system,"Hiragino Sans",sans-serif;background:#faf7f3;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0 0;color:var(--ink)}
 .warn{font-size:13px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:10px 12px;margin-top:10px;text-align:left;color:#7a5a16}
 .stop{font-size:14px;background:#fff6e5;border:1px solid #f3cf8a;border-radius:10px;padding:12px 14px;color:#7a5a16;text-align:center}
@@ -148,6 +151,8 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp
 function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(function(){e.classList.remove("on")},2200)}
 function stopMsg(t){document.getElementById("custList").innerHTML="<div class='stop'>"+esc(t)+"</div>";document.getElementById("custNote").style.display="none"}
 function parseJsonc(t){return JSON.parse(t.replace(/^\s*\/\/.*$/gm,"").replace(/[ \t]+\/\/[^"\n]*$/gm,""))}
+/* 住所の折り返し（2026/10/30）：空白の所（〒の後・建物名の前）で折り返してよい。「203号室」のような部屋番号は途中で切らない。値は shop.jsonc のまま */
+function addrHtml(a){return esc(a).replace(/ +/g," <wbr>").replace(/(\d+号室?)/g,"<span class='nw'>$1</span>")}
 
 /* 予約1回の長さ（枠をふさぐ分）：メニューの slot か、前の時間＋施術＋後の時間（サーバーと同じ計算。2026/10/21） */
 function slotOf(m){return +m.slot||((+SHOP.preMin||0)+(+m.min)+(+SHOP.bufferMin||0))}
@@ -277,25 +282,25 @@ function send(){
     if(res.status==502){e.innerHTML="<div class='warn'>"+esc((res.body&&res.body.error)||"ご予約を完了できませんでした。お手数ですが LINE かお電話でご連絡ください")+"</div>";btn.disabled=false;btn.textContent="この内容で予約する";load();return}
     if(res.status!=200){e.textContent=(res.body&&res.body.error)||"予約できませんでした。もう一度お試しください。";btn.disabled=false;btn.textContent="この内容で予約する";return}
     var when=jp(c.k)+" "+c.t+"〜";
-    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を受け付けました</div><p class='note'>"+esc(when)+"<br>"+esc(namesOf(ms))+(ms.length>1?"<br>施術 合計"+minOf(ms)+"分・所要 約"+lenOf(ms)+"分":"")+"</p>";
+    var h="<div class='thanks'><div class='big'>✓</div><div class='h'>ご予約を受け付けました</div><p class='note'>"+esc(when)+"<br>"+esc(namesOf(ms))+(ms.length>1?"<br><span class='nw'>施術 合計"+minOf(ms)+"分</span>・<wbr><span class='nw'>所要 約"+lenOf(ms)+"分</span>":"")+"</p>";
     // 場所（住所・駐車場・地図・電話）。値があるものだけ（shop.jsonc）
     var pl=[];
-    if(SHOP.address)pl.push(esc(SHOP.address));
+    if(SHOP.address)pl.push(addrHtml(SHOP.address));
     if(SHOP.parking)pl.push(esc(SHOP.parking));
-    if(SHOP.mapUrl)pl.push("<a href='"+esc(SHOP.mapUrl)+"' target='_blank' rel='noopener'>Googleマップで道順を見る</a>");
+    if(SHOP.mapUrl)pl.push("<a href='"+esc(SHOP.mapUrl)+"' target='_blank' rel='noopener'>Googleマップで<wbr>道順を見る</a>");
     if(SHOP.tel)pl.push("お電話　<a href='tel:"+esc(String(SHOP.tel).replace(/[^0-9+]/g,""))+"'>"+esc(SHOP.tel)+"</a>");
     if(pl.length)h+="<div class='policy' style='text-align:left'><b>■ 場所</b><br>"+pl.join("<br>")+"</div>";
     // 確認メールが届かないときの案内（デモはメールを送っていないので出さない）と、HP にもどるボタン（shop.jsonc に backUrl・backText があるときだけ）
     var w2=[];if(SHOP.lineUrl)w2.push("LINE");if(SHOP.tel)w2.push("お電話");
     if(res.body&&res.body.mail===false)h+="<p class='note warn'>"+esc(res.body.note||"確認メールをお送りできませんでした。確認メールが届かない場合は LINE かお電話でご連絡ください")+"</p>";   // メールを送れなかったが予約は入っている（2026/10/26）
-    if(!(res.body&&res.body.demo))h+="<p class='note' style='margin-top:10px'>確認メールが届かないときは、迷惑メールをご確認のうえ、"+(w2.length?w2.join("か")+"で":"お店に")+"ご連絡ください。</p>";
+    if(!(res.body&&res.body.demo))h+="<p class='note' style='margin-top:10px'>確認メールが<wbr>届かないときは、<wbr>迷惑メールを<wbr>ご確認のうえ、<wbr><span class='nw'>"+(w2.length?w2.join("か")+"で":"お店に")+"</span><wbr>ご連絡ください。</p>";
     if(SHOP.backUrl&&SHOP.backText)h+="<div class='bottomback' style='margin-top:12px'><a class='back on' href='"+esc(SHOP.backUrl)+"'>"+esc(SHOP.backText)+"</a></div>";
     if(res.body&&res.body.demo){
       // デモ：メールは送っていない。本番で届くメールの見本を出す
-      h+="<div class='warn'>これはデモです。メールは送っていません。<br>本番では、次の確認メールがお客さまに、予約の知らせがお店に届きます。</div>"+
+      h+="<div class='warn'>これはデモです。<wbr>メールは送っていません。<br>本番では、<wbr>次の確認メールが<wbr>お客さまに、<wbr>予約の知らせが<wbr>お店に届きます。</div>"+
          "<pre class='mailpre'>"+esc(res.body.mailPreview||"")+"</pre>";
     }else{
-      h+="<p class='note'>"+esc(ml)+" に確認メールをお送りしました。届かないときは迷惑メールもご確認ください。<br>当日お待ちしております。</p>";
+      h+="<p class='note'>"+esc(ml)+" に<wbr>確認メールを<wbr>お送りしました。<wbr><span class='nw'>届かないときは</span><wbr>迷惑メールも<wbr>ご確認ください。<br>当日<wbr>お待ちしております。</p>";
     }
     document.getElementById("sheetBox").innerHTML=h+"<button class='btn main' onclick='closeForm()'>とじる</button></div>";
     load();

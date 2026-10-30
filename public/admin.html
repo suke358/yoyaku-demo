@@ -273,7 +273,7 @@ function renderDay(){
   var h="<div class='dayhead'><b>"+jp(sel)+"</b><small>営業 "+esc(hh.s)+"〜"+esc(hh.e)+"</small></div>";
   var bl=(blocks[sel]||[]).slice().sort(function(a,c){return a.s<c.s?-1:1});
   h+="<div class='tl'>";
-  if(!bl.length)h+="<div class='empty'>この日の予約はまだありません</div>";
+  if(!bl.length){var cn=(cancels[sel]||[]).length;h+="<div class='empty'>"+(cn?"この日の予約はありません（取り消し "+cn+"件）":"この日の予約はまだありません")+"</div>";}   // 取り消しだけの日は、その数も（2026/10/30）
   bl.forEach(function(x){
     if(x.kind=="stop"){
       h+="<div class='ti stop'><span><b>予約停止</b>　"+esc(x.s)+"〜"+esc(x.e)+"<br><small>この時間はネット予約に出ません</small></span><button onclick=\"unblock('"+esc(x.id)+"','予約停止をやめました（HP でまた予約できます）')\">予約停止をやめる</button></div>";

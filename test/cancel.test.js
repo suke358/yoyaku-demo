@@ -327,6 +327,31 @@ describe('お客さん側の予約の取り消し（2026/10/30）', () => {
     expect(ng.headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('お客さんが取り消した枠に、同じ日時でもう一度予約が入る（二重予約にならず 200）。別の人でも本人でも', async () => {
+    const a = await book(D, '10:00');
+    expect((await (await cancel({ t: a.token, confirm: true })).json()).canceled).toBe(true);
+    const r = await post('/api/book', { date: D, start: '10:00', menu: M1.name, name: '次の 人', tel: '090-3333-3333', email: 'next@example.com' });
+    expect(r.status).toBe(200);
+    expect(await blocksOf(D)).toHaveLength(1);
+    const b = await book(D, '14:00');
+    expect((await (await cancel({ t: b.token, confirm: true })).json()).canceled).toBe(true);
+    const r2 = await post('/api/book', { date: D, start: '14:00', menu: M1.name, name: 'テスト 花子', tel: TEL, email: MAIL });   // 本人がもう一度
+    expect(r2.status).toBe(200);
+    expect((await r2.json()).id).not.toBe(b.id);
+    expect(await blocksOf(D)).toHaveLength(2);
+    expect((await cancel({ t: b.token })).status).toBe(200);   // 古いリンクは「取り消し済み」のまま（新しい予約には効かない）
+    expect((await (await cancel({ t: b.token })).json()).already).toBe(true);
+  });
+
+  it('管理画面で取り消した枠にも、同じ日時でもう一度予約が入る（200）', async () => {
+    const a = await book(D, '10:00');
+    expect((await admin('DELETE', 'block', { id: a.id })).status).toBe(200);
+    const r = await post('/api/book', { date: D, start: '10:00', menu: M1.name, name: '次の 人', tel: '090-3333-3333', email: 'next@example.com' });
+    expect(r.status).toBe(200);
+    expect(await blocksOf(D)).toHaveLength(1);
+    expect(await cancelsAll()).toHaveLength(0);   // 管理画面の取り消しは cancels に残らない
+  });
+
   it('取り消しのページ /cancel が開ける（noindex・照合の入力・確認の作り）', async () => {
     const r = await api('/cancel');
     expect(r.status).toBe(200);
